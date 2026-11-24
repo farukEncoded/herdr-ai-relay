@@ -1,0 +1,8 @@
+{
+  "global": {
+    "ctrl-alt-r": "mod.open:ai-relay-kit-launcher",
+    "ctrl-alt-a": "mod.open:ai-relay-kit-commands",
+    "ctrl-alt-p": "ai-relay-kit.panel",
+    "ctrl-alt-h": { "command": "pane.split", "args": { "direction": "right", "mod": "ai-relay-kit-handoff" } }
+  }
+}

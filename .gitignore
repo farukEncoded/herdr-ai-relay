@@ -1,0 +1,16 @@
+# Written by Herdr when a mod is checked or loaded
+gpui-kit.d.ts
+herdr.d.ts
+jsconfig.json
+*.error
+
+# Never commit local state or secrets
+.env
+.env.*
+*.pem
+*.key
+usage/
+.ai/relay/
+node_modules/
+.DS_Store
+Thumbs.db

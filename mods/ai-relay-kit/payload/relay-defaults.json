@@ -1,0 +1,44 @@
+{
+  "_help": "Your relay defaults, used by the 'relay' command, the Herdr 'Start AI relay' dialog and agents' 'relay' setup. Anything you choose when starting a relay overrides these. team: which team runs by default. teams: roles in order; each role has a job, a default agent (claude | codex | antigravity) and effort (low | medium | high | xhigh | max | default); once = first pass only; judge = approves or asks for changes (default: the last role). strengths: what each agent is good at; queue mode picks each task's agents from these. effort: 'recommended' (each role's own effort), 'none' (agent defaults) or 'role=level,...'. model: 'default' or 'role=name,...'. The executor always runs at high effort or above. codexApproveForMe: Codex stages start with --approve-for-me (no repeated git approval prompts). codexWindowsSandbox: the Windows sandbox Codex stages run in (-c windows.sandbox=<value>; default 'mxc'; 'none' = leave it to your Codex config). overnight: settings for unattended -Overnight runs (see its own _help). To add a team, copy _exampleTeam into teams under a name of your own (e.g. \"docs\").",
+  "team": "coding",
+  "teams": {
+    "coding": [
+      { "role": "planner",  "agent": "claude",      "effort": "high",   "once": true,
+        "job": "Write or update the task file .ai/tasks/T-xxx.md (goal, approach, files, acceptance criteria). No production code." },
+      { "role": "executor", "agent": "antigravity", "effort": "high",
+        "job": "Implement the task file. Do not change its acceptance criteria; note any deviation in its Notes." },
+      { "role": "tester",   "agent": "codex",       "effort": "medium",
+        "job": "Test against the acceptance criteria in the task file, write tests, fill in its Test report. Report bugs instead of fixing production code." },
+      { "role": "reviewer", "agent": "claude",      "effort": "high",   "judge": true,
+        "job": "Review the changes against the task file and .ai/DECISIONS.md and write your findings in its Review." }
+    ]
+  },
+  "_exampleTeam": [
+    { "role": "outliner", "agent": "claude", "effort": "high", "once": true,
+      "job": "Outline the document in .ai/tasks/T-xxx.md: sections, audience, sources. No final text." },
+    { "role": "writer",   "agent": "codex",  "effort": "high",
+      "job": "Write the document from the outline. Keep to the outline's sections." },
+    { "role": "editor",   "agent": "claude", "effort": "high", "judge": true,
+      "job": "Check the text for accuracy and clarity; list what must change in the task file's Review." }
+  ],
+  "strengths": {
+    "claude": "planning, architecture, code review, tricky logic, writing",
+    "codex": "static assets (images, icons, illustrations via image generation), scripts, tests",
+    "antigravity": "app code, UI and full features, refactors"
+  },
+  "codexApproveForMe": true,
+  "codexWindowsSandbox": "mxc",
+  "overnight": {
+    "_help": "Used with -Overnight (or the Overnight box in the dialog). skipPermissions: start every agent with its permission checks off (claude --dangerously-skip-permissions, codex --dangerously-bypass-approvals-and-sandbox, agy --dangerously-skip-permissions). until: no new task starts after this time ('08:00'), or 'done' = no time limit. maxCycles: plan-and-run cycles in queue mode, 0 = no limit. Whichever limit comes first ends the night; it also ends when nothing worthwhile is left. stallMinutes: no progress for this long = nudge, then skip. maxStageMinutes: a stage is interrupted after this long.",
+    "skipPermissions": true,
+    "until": "07:00",
+    "maxCycles": 3,
+    "stallMinutes": 30,
+    "maxStageMinutes": 180
+  },
+  "maxRounds": 3,
+  "askEachRound": true,
+  "timeoutMin": 120,
+  "effort": "recommended",
+  "model": "default"
+}
