@@ -56,6 +56,13 @@ In any Herdr tab, ask your agent:
 Read ~/.config/herdr-app/AGENTS.md, then add this mod: herdr.dev/mods/farukEncoded/herdr-ai-relay
 ```
 
+Or point it at GitHub directly. This works even before the herdr.dev gallery lists the mod, and the gallery can
+take a while to list a new one:
+
+```
+Read ~/.config/herdr-app/AGENTS.md, then add this mod: github.com/farukEncoded/herdr-ai-relay
+```
+
 The agent copies the six folders in [`mods/`](mods) into `~/.config/herdr-app/mods/` and merges
 [`keys.json`](keys.json) into yours (it asks before replacing a key you already use).
 

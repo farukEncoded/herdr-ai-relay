@@ -16,7 +16,7 @@ $prot = '{"claude":{"file":"C:/h/.claude/CLAUDE.md","exists":true,"hasBlock":tru
 $cases = [ordered]@{
   fresh     = "{ok:true,installed:false,foreign:true,kitVersion:'0.1.0',installedVersion:'',protocolDir:'C:/h/.agents/protocol',tools:$tools,protocol:$prot,path:{dir:'C:/h/.agents/protocol/bin',onPath:false},programs:{entries:{},managed:false}}"
   installed = "{ok:true,installed:true,foreign:false,kitVersion:'0.2.0',installedVersion:'0.1.0',protocolDir:'C:/h/.agents/protocol',tools:$tools,protocol:$prot,path:{dir:'C:/h/.agents/protocol/bin',onPath:true},programs:{entries:{relay:true},managed:true}}"
-  failed    = "{ok:false,error:'powershell not found'}"
+  error     = "{ok:false,error:'powershell not found'}"
   other     = "{ok:false,unsupported:true}"
 }
 # The project view with awkward relay data: a missing usage window, an unknown agent, a stage without a role,

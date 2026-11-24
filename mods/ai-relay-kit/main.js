@@ -349,7 +349,14 @@ export default class AiProject extends View {
         .child(textBtn("relay-stop", "stop", "Stop", () => this.act("stop"), true))
         // Switch this running relay to overnight mode, or change an overnight relay's limits: opens a small box
         // (Run until a time / until done, Cycles); the relay picks it up within seconds, also mid-question.
-        .child(h_flex().id("relay-night-btn").h(24).px(8).gap(5).items_center().rounded(6)
+        // Relays started before "Make overnight" existed (their status has no 'overnight' field) never read the
+        // request: show why instead of a button that does nothing.
+        .child(r.overnight === undefined
+          ? h_flex().id("relay-night-old").h(24).px(8).gap(5).items_center().rounded(6).border(1).border_color(t.border)
+            .text_size(11.5).text_color(t.dim).opacity(0.7)
+            .tooltip("This relay started before 'Make overnight' existed, so it can't switch. Start it again (or a new relay) to use overnight mode.")
+            .child(icon("history", 12)).child("Overnight n/a")
+          : h_flex().id("relay-night-btn").h(24).px(8).gap(5).items_center().rounded(6)
           .border(1).border_color(t.ansi4).text_size(11.5).text_color(t.ansi4).cursor_pointer().hover((s) => s.bg(t.hover))
           .on_click(() => openOverlay({ mod: MOD.overnight, kind: "dialog", width: 520, height: 400,
             props: { folder: this.data?.root, overnight: Boolean(r.overnight), until: r.until, maxCycles: r.maxCycles, queue: Boolean(r.queueMode) } }))

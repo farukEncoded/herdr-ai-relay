@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.1.1 (2026-11-24)
+
+- **Panel**: a relay that was started before *Make overnight* existed now shows a greyed **Overnight n/a**
+  (its tooltip says to start the relay again) instead of a Make overnight button that could do nothing.
+- **README**: install straight from GitHub (`add this mod: github.com/farukEncoded/herdr-ai-relay`), which works
+  before the herdr.dev gallery lists the mod; the herdr.dev line now names the real owner.
+- **Setup**: the kit version is 0.1.1, so the panel offers to update relay files copied by 0.1.0.
+
 ## 0.1.0 (2026-11-24): first public release
 
 - **Relay**: runs a project through a team of agents, each in its own Herdr tab. The built-in coding team is
