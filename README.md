@@ -1,11 +1,17 @@
 # herdr-ai-relay
 
-**A relay team of AI coding agents inside the Herdr app.** Give it a goal and it runs your project through a
-planner, an executor, a tester and a reviewer, one after another, each in its own Herdr tab. Pick which agent
-plays each role (Claude Code, Codex or Antigravity) and how hard each one thinks. The reviewer approves the work
-or sends it back for a fix round. A panel shows every stage live, with tokens and plan usage. It can also run
-unattended overnight on its own git branch. Every agent shares one memory in the project's `.ai/` folder, so any
-of them can pick up where another stopped.
+**Your AI coding agents, working as one team.** Give it a goal and Claude Code, Codex and Antigravity take turns
+on it: one plans, one builds, one tests, one reviews, each in its own Herdr tab. The reviewer approves the work or
+sends it back for another round, so no agent marks its own homework.
+
+- **No more copy-pasting between agents.** They hand off through a shared `.ai/` memory (state, handoff notes,
+  decisions, log), so any agent can pick up exactly where another stopped.
+- **No babysitting.** Start a relay with one click or by typing `relay` in any agent, then follow every stage,
+  token and plan limit in one panel.
+- **It keeps going while you sleep.** Overnight mode plans and finishes tasks on its own git branch and leaves you
+  a morning report.
+
+You choose which agent plays each role and how hard each one thinks.
 
 ![The AI Relay panel, the Start AI relay dialog and the setup screen](preview.png)
 

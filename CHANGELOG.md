@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Docs**: a plainer pitch in the README and the herdr.dev gallery text (RECIPE.md): what the relay does for you, in a few lines.
+
 ## 0.1.1 (2026-11-24)
 
 - **Panel**: a relay that was started before *Make overnight* existed now shows a greyed **Overnight n/a**

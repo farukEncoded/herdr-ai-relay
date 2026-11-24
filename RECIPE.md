@@ -1,10 +1,11 @@
-# AI Relay Kit
+# AI Relay
 
-A right-hand panel, a dialog, a command list and a handoff viewer that run a project through a team of AI
-agents (coding team: planner → executor → tester → reviewer), each in its own Herdr tab, and show the project's
-shared `.ai/` memory live. The first time, the panel is a step-by-step "Set up AI relay" screen.
+Turn Claude Code, Codex and Antigravity into one dev team. Give it a goal: one agent plans, one builds, one tests
+and one reviews, each in its own Herdr tab, handing the work over through a shared `.ai/` memory until the reviewer
+signs off. No copy-pasting between agents, no babysitting approvals. Start it with one click or by typing `relay` in
+any agent, watch every stage in one panel, or let it run overnight on its own git branch.
 
-![AI Relay Kit](preview.png)
+![AI Relay](preview.png)
 
 ## What you see
 
