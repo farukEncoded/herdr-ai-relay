@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1 (2026-11-25)
+
+- **Fix: OpenCode now gets the shared protocol.** Setup step 3 adds it to `~/.config/opencode/AGENTS.md` (OpenCode's
+  global rules), next to Claude, Codex and Antigravity. Before, OpenCode stages were told to follow a protocol they
+  had never seen, so they skipped the LOG line and signed wrongly. Measured on a tester benchmark (a task with two
+  planted bugs): with the protocol, OpenCode on Nemotron 3 Ultra (free) and on DeepSeek V4.1 Flash both found both
+  bugs, left the production code alone and kept every protocol step.
+- **Protocol**: OpenCode's signature surface is `opencode-cli` (for example `opencode-cli/deepseek-v4.1-flash`).
+- **Setup**: the kit version is 0.2.1.
+
 ## 0.2.0 (2026-11-25)
 
 **Quota no longer stops a relay.**

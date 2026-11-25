@@ -4,7 +4,7 @@
 #
 #   detect              what is installed: agents found/missing, protocol blocks, PATH, programs.json
 #   install             copy the engine (this folder) to ~/.agents/protocol
-#   protocol -Agent X   add the protocol block to X's global rules file (claude | codex | antigravity), with a backup
+#   protocol -Agent X   add the protocol block to X's global rules file (claude | codex | antigravity | opencode), with a backup
 #   path                add ~/.agents/protocol/bin (the 'relay' command) to the user PATH
 #   programs            add Herdr programs.json entries (+ menu) for the agents found, plus 'AI Relay'
 #   tasks               two Windows tasks: live usage for the panel (every 10 min) and the weekly model report
@@ -23,7 +23,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-$KitVersion = '0.2.0'
+$KitVersion = '0.2.1'
 $Source = $PSScriptRoot
 
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
@@ -47,6 +47,8 @@ $RuleFiles = [ordered]@{
   claude      = Join-Path $claudeHome 'CLAUDE.md'
   codex       = Join-Path $codexHome 'AGENTS.md'
   antigravity = Join-Path $UserHome '.gemini\GEMINI.md'
+  # OpenCode reads ~/.config/opencode/AGENTS.md; without the protocol there its relay stages skip the LOG line and sign wrongly.
+  opencode    = Join-Path $UserHome '.config\opencode\AGENTS.md'
 }
 $BEGIN = '<!-- AI-PROTOCOL:BEGIN (managed by AI Relay Kit - edit ~/.agents/protocol/AI-PROTOCOL.md, then run Set up again) -->'
 $END = '<!-- AI-PROTOCOL:END -->'
@@ -198,7 +200,7 @@ function Require-Installed {
 function Do-Protocol {
   Require-Installed
   $key = $Agent.ToLower(); if ($key -eq 'agy' -or $key -eq 'gemini') { $key = 'antigravity' }
-  if (-not $RuleFiles.Contains($key)) { throw "Unknown agent '$Agent' (claude | codex | antigravity)." }
+  if (-not $RuleFiles.Contains($key)) { throw "Unknown agent '$Agent' (claude | codex | antigravity | opencode)." }
   $file = $RuleFiles[$key]
   $m = Read-Manifest
   if (-not $m.protocol) { Set-Prop $m 'protocol' ([pscustomobject]@{}) }

@@ -53,7 +53,8 @@ $env:AI_RELAY_KIT_FAKE_TASKS = Join-Path $fake 'fake-tasks'
   $r = Run @('-Action', 'install'); Check 'install ok' $r.ok
   $ra = Get-Content (Join-Path $fake '.agents\protocol\RELAY-AGENT.md') -Raw
   Check 'RELAY-AGENT.md has the real path' (($ra -notmatch 'PROTOCOL_DIR') -and $ra.Contains("$fake\.agents\protocol\ai-relay.ps1"))
-  foreach ($a in @('claude', 'codex', 'antigravity')) { $r = Run @('-Action', 'protocol', '-Agent', $a); Check "protocol $a ok" $r.ok }
+  foreach ($a in @('claude', 'codex', 'antigravity', 'opencode')) { $r = Run @('-Action', 'protocol', '-Agent', $a); Check "protocol $a ok" $r.ok }
+  Check 'opencode rules file has the protocol' ((Get-Content (Join-Path $fake '.config\opencode\AGENTS.md') -Raw) -match 'AI-PROTOCOL:END')
   $cx = Get-Content (Join-Path $fake '.codex\AGENTS.md') -Raw
   Check 'codex file keeps old text + block' (($cx -match 'keep me') -and ($cx -match 'AI-PROTOCOL:END'))
   Check 'codex backup made' (Test-Path (Join-Path $fake '.codex\AGENTS.md.bak-ai-relay-kit'))
@@ -79,6 +80,7 @@ Check 'detect: key state reported, never the key' (($null -ne $d.openrouter.keyS
   $r = Run @('-Action', 'remove'); Check 'remove ok' $r.ok
   $r.notes | ForEach-Object { Write-Host "    $_" }
   Check 'codex file restored exactly' ((Get-Content (Join-Path $fake '.codex\AGENTS.md') -Raw).Trim() -eq "# my codex rules`r`nkeep me")
+  Check 'opencode rules file (created by setup) deleted' (-not (Test-Path (Join-Path $fake '.config\opencode\AGENTS.md')))
   Check 'claude file (created by setup) deleted' (-not (Test-Path (Join-Path $fake '.claude\CLAUDE.md')))
   $gm = Get-Content (Join-Path $fake '.gemini\GEMINI.md') -Raw
   Check 'gemini edit kept, block gone' (($gm -match 'my own line') -and ($gm -notmatch 'AI-PROTOCOL'))

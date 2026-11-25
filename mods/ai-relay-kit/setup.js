@@ -8,7 +8,7 @@ import { v_flex, h_flex } from "gpui-base";
 import { setShared } from "herdr";
 import { AGENTS, agentIcon, icon, pill, setupAction, openUrl, onWindows, SHARED_SETUP, RELAY_ICON } from "./lib.js";
 
-const AGENT_TOOL = { claude: "claude", codex: "codex", antigravity: "antigravity" };
+const AGENT_TOOL = { claude: "claude", codex: "codex", antigravity: "antigravity", opencode: "opencode" };
 const short = (p, home) => (home && p && p.toLowerCase().startsWith(home.toLowerCase()) ? "~" + p.slice(home.length).replace(/\\/g, "/") : p);
 
 export class Setup {

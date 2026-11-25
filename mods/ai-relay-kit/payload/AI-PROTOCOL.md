@@ -13,7 +13,8 @@ files do not count: they live outside the project.
   | Claude Code | `claude-desktop` (Code tab in the Claude app), `claude-cli` (any terminal, including Herdr), `claude-ide` (VS Code/JetBrains) |
   | Codex | `codex-app` (ChatGPT desktop app, Codex mode), `codex-cli` (any terminal, including Herdr), `codex-ide` |
   | Antigravity | `antigravity-app` (Antigravity 2.0 app), `antigravity-ide` (Antigravity IDE), `antigravity-cli` (`agy`, including Herdr) |
-  **Inside Herdr** (env var `HC_TERMINAL_ID` is set): always use the `-cli` surface (`claude-cli`, `codex-cli`, `antigravity-cli`).
+  | OpenCode | `opencode-cli` (any terminal, including Herdr); the model is its OpenRouter id, e.g. `opencode-cli/deepseek-v4.1-flash` |
+  **Inside Herdr** (env var `HC_TERMINAL_ID` is set): always use the `-cli` surface (`claude-cli`, `codex-cli`, `antigravity-cli`, `opencode-cli`).
   Otherwise pick the surface from what you know about your own environment (Claude Code: env var `CLAUDE_CODE_ENTRYPOINT`).
   If you can't tell, use `claude`, `codex` or `antigravity`.
 - Applies when you work **inside a project folder** (you read, create or change files there).

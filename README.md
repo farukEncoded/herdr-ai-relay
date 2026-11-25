@@ -213,8 +213,9 @@ overnight on a new branch. The agent already running keeps its own mode.
 - Normal (daytime) relays use each agent's own permission settings, so approvals still go to you.
 - **What setup changes**, only when you click each step:
   - `~/.agents/protocol/`: the relay engine and your defaults.
-  - A block between `AI-PROTOCOL:BEGIN/END` markers in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md` and
-    `~/.gemini/GEMINI.md`, with a `.bak-ai-relay-kit` backup of each file.
+  - A block between `AI-PROTOCOL:BEGIN/END` markers in `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
+    `~/.gemini/GEMINI.md` and (for OpenCode) `~/.config/opencode/AGENTS.md`, with a `.bak-ai-relay-kit` backup of
+    each existing file.
   - One entry in your user PATH.
   - Entries in Herdr's `programs.json`. Entries you already have are kept.
 
