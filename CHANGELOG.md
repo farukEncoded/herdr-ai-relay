@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 (2026-11-25)
+
+- **The LOG stays complete.** When a stage finishes without writing its line in `.ai/LOG.md` (some OpenCode models
+  skip it), the relay writes one for it (signature, role, task) and commits only that file, as `ai-relay`. Other
+  uncommitted work is left alone.
+- The stats still record that the agent skipped it (`logFilled`), so the protocol score and the model scout stay honest.
+- **Setup**: the kit version is 0.3.1.
+
 ## 0.3.0 (2026-11-25)
 
 **Model scout: OpenRouter's new models, graded for your relay.**

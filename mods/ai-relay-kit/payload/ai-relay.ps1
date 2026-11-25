@@ -1345,7 +1345,7 @@ function Write-StageStats($entry) {
       tokens = $(if ($entry.usage -and $entry.usage.tokens) { [int64]$entry.usage.tokens } else { $null })
       cost = $(if ($entry.usage -and $null -ne $entry.usage.cost) { [double]$entry.usage.cost } else { $null })
       planBefore = $entry.planBefore; planAfter = $entry.planAfter
-      logLines = $entry.logLines; sigOk = [bool]$entry.sigOk; commits = $entry.commits
+      logLines = $entry.logLines; logFilled = [bool]$entry.logFilled; sigOk = [bool]$entry.sigOk; commits = $entry.commits
       compliant = ($entry.state -eq 'done' -and $entry.logLines -gt 0 -and [bool]$entry.sigOk -and $entry.commits -gt 0)
       trial = [bool]$entry.trial
       overnight = [bool]$Overnight }
@@ -1956,6 +1956,24 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
     } catch {}
   }
   $entry.state = $(if (Test-Path $marker) { 'done' } else { 'skipped' })
+  # A finished stage without a LOG line (OpenCode models skip it most): the relay writes one for it and commits only
+  # LOG.md, so the shared record stays complete. Stats keep logLines = 0 (logFilled marks it): compliance stays honest.
+  if ($entry.state -eq 'done' -and $entry.logLines -le 0) {
+    try {
+      $logPath = Join-Path $Folder '.ai\LOG.md'
+      $sig = $(if ($entry.sigOk) { ($who -split '\s')[0] } else { "$kind" })
+      $tid = $(if ($script:currentTask) { $script:currentTask } else { '-' })
+      $line = "{0} | {1} | {2} | {3} | stage {4} done; LOG line added by relay (agent skipped it)" -f (Get-Date).ToString('yyyy-MM-dd HH:mm'), $sig, $st.Role, $tid, $i
+      $txt = ''; if (Test-Path $logPath) { $txt = [IO.File]::ReadAllText($logPath) }
+      if ($txt -and -not $txt.EndsWith("`n")) { $line = "`n" + $line }
+      [IO.File]::AppendAllText($logPath, $line + "`n", (New-Object System.Text.UTF8Encoding($false)))
+      $entry.logFilled = $true
+      $gitExe = (Get-Command git | Select-Object -First 1).Source
+      $null = Invoke-Native $gitExe @('-C', $Folder, 'add', '--', '.ai/LOG.md') 30
+      $null = Invoke-Native $gitExe @('-C', $Folder, 'commit', '--author=ai-relay <ai@localhost>', '-m', "[ai-relay] ${tid}: LOG line for stage $i ($sig)", '--', '.ai/LOG.md') 30
+      Write-Host "  no LOG line from the agent: the relay added one." -ForegroundColor DarkYellow
+    } catch { Write-Host "  could not add the missing LOG line ($($_.Exception.Message))." -ForegroundColor DarkGray }
+  }
   # A finished stage must not leave servers or test runs behind for the next one (a skipped stage may still be working).
   # ForEach-Object unrolls the list the function returns (else 'cleaned' becomes [[...]] and looks non-empty).
   if ($entry.state -eq 'done') { $entry.cleaned = @(Stop-StageLeftovers ([string]$tab.terminal) $script:stageStart | ForEach-Object { $_ }) }
