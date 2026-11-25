@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0 (2026-11-25)
+
+**Model scout: OpenRouter's new models, graded for your relay.**
+- `tools/model-scout.mjs` pulls credible data every day: OpenRouter's model list (price, context, tool calling),
+  per-provider uptime, the Artificial Analysis Intelligence Index and Vals Index (from OpenRouter's rankings data),
+  OpenRouter's coding usage per task (implementation, testing, code review, planning) and Terminal-Bench. Sources
+  older than 180 days (today SWE-bench Verified and Aider) are skipped automatically, never guessed.
+- It scores each candidate per role. Your own measurements weigh most: `tools/model-bench.ps1` runs small relay
+  tasks with a known right answer (tester: find 2 planted bugs; executor: make acceptance tests pass; reviewer:
+  catch a planted problem) and checks every protocol step.
+- Changes: the tester list updates itself, only on measured evidence; executor, reviewer and planner get proposals
+  you Accept or Dismiss in the panel. Paid models are benchmarked only when credible data says it's worth it and
+  within a cap; free ones any time. Every change is logged with its reason (`usage/model-ledger.jsonl`).
+- Trials: 1 in 5 tester stages may try the scout's trial model (free models, projects that allow them).
+- **Signatures**: the relay tells OpenCode its exact signature (`opencode-cli/<model>`), so LOG lines, commits and
+  done files always name the model that did the work, also after a switch.
+- Needs Node (already there with OpenCode). **Setup**: the kit version is 0.3.0.
+
 ## 0.2.1 (2026-11-25)
 
 - **Fix: OpenCode now gets the shared protocol.** Setup step 3 adds it to `~/.config/opencode/AGENTS.md` (OpenCode's

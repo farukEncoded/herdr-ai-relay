@@ -28,6 +28,14 @@ if ($Schedule) {
   exit 0
 }
 
+# The model scout (D-032) first, when Node and an OpenRouter key are there: fresh grades and proposals for this report
+# (it changes only the tester list, only on measured evidence; other roles stay proposals).
+$scoutJs = Join-Path $PSScriptRoot 'model-scout.mjs'
+if ((Test-Path $scoutJs) -and (Get-Command node -ErrorAction SilentlyContinue) -and
+    ($env:OPENROUTER_API_KEY -or [Environment]::GetEnvironmentVariable('OPENROUTER_API_KEY', 'User'))) {
+  try { & node $scoutJs --apply 2>&1 | Out-Null } catch {}
+}
+
 function Read-Lines([string]$p) {
   if (-not (Test-Path $p)) { return @() }
   return @([IO.File]::ReadAllLines($p, $utf8) | Where-Object { $_.Trim() } | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} })

@@ -23,7 +23,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-$KitVersion = '0.2.1'
+$KitVersion = '0.3.0'
 $Source = $PSScriptRoot
 
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
@@ -35,7 +35,8 @@ $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 # The engine files copied to ~/.agents/protocol (relative paths).
 $PayloadFiles = @('ai-relay.ps1', 'setup.ps1', 'AI-PROTOCOL.md', 'RELAY-AGENT.md', 'relay-defaults.json',
-                  'bin\relay.cmd', 'bin\claude-statusline.ps1', 'tools\model-report.ps1', 'tools\usage-refresh.ps1')
+                  'bin\relay.cmd', 'bin\claude-statusline.ps1', 'tools\model-report.ps1', 'tools\usage-refresh.ps1',
+                  'tools\model-scout.mjs', 'tools\model-bench.ps1')
 # The Windows tasks the 'tasks' step sets up (tools/*.ps1 -Schedule) and Remove deletes.
 $TaskNames = @('AI relay usage refresh', 'AI relay model report')
 # Files the user is expected to edit: never overwritten once they exist.

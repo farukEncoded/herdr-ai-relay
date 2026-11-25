@@ -49,6 +49,10 @@ You choose which agent plays each role and how hard each one thinks.
 - **Model report**: every stage is recorded (model, minutes, tokens, cost, round outcome, quota switches, protocol
   kept). `tools/model-report.ps1` turns it into a report with charts and suggestions; a weekly task can run it, and
   the panel's Models card opens it and applies the safe suggestions.
+- **Model scout** (with OpenCode): grades OpenRouter's models per role from credible sources (OpenRouter's data
+  with the Artificial Analysis and Vals indexes, Terminal-Bench) and from its own small benchmark, tries promising
+  free ones on 1 in 5 tester stages, and keeps the best first: by itself for the tester, as a proposal you accept
+  for the other roles. Paid models are only benchmarked when credible data says it's worth it.
 - **Notifications and estimates**: a toast when a stage switches model, another agent takes over, the relay waits
   for quota or finishes; the Start dialog estimates minutes, plan use and cost from your past stages.
 - **Stages clean up after themselves**: agents stop the dev servers and test runs they started, and the relay
@@ -172,6 +176,10 @@ when starting a relay overrides it.
 | `opencode.models` | per role | OpenRouter model ids per role, best first; the relay takes the first that is listed, has quota and fits the budget. |
 | `opencode.freeModelProjects` | `[]` | Project folder names that may use free models, or `["all"]`. Free providers may keep what they're sent. |
 | `opencode.budgetStopPercent` / `budgetPace` | `90` / `"weekly"` | Paid models stop at this share of the key's limit, and may only use the share for the weeks passed so far. |
+| `scout.autoPromoteRoles` | `["tester"]` | Roles whose OpenCode model list the scout may change by itself (measured evidence only). |
+| `scout.trialEvery` | `5` | 1 in this many tester stages tries the scout's trial model (free, allowed projects). |
+| `scout.paidBenchCapUsd` / `maxPaidBenchPerWeek` | `0.25` / `2` | Most a paid benchmark stage may cost, and paid models measured a week. |
+| `scout.goodEnough` / `minMargin` | `85` / `5` | A measured first choice this good gets no paid challengers; a challenger must lead by this many points. |
 | `overnight.skipPermissions` | `true` | Overnight stages start agents with their permission checks off (see Safety). |
 | `overnight.until` | `"07:00"` | Overnight: no new task after this time, or `"done"` for no time limit. |
 | `overnight.maxCycles` | `3` | Overnight queue: plan-and-run cycles at most, `0` = no limit. |

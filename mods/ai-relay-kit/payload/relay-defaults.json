@@ -67,6 +67,18 @@
     "budgetStopPercent": 90,
     "budgetPace": "weekly"
   },
+  "scout": {
+    "_help": "The model scout (tools/model-scout.mjs, D-032) grades OpenRouter models for OpenCode from credible sources (OpenRouter's data incl. Artificial Analysis and Vals indexes, Terminal-Bench; SWE-bench and Aider only while recent) plus our own benchmark (tools/model-bench.ps1) and real relay results. autoPromoteRoles: roles whose list it may change by itself, only on measured evidence; other roles get a proposal you accept in the panel. minMargin: points a challenger must lead by. goodEnough: a measured first choice at or above this gets no paid challengers. trialEvery: 1 in this many tester stages tries the scout's trial model (free models, projects that allow them). paidBenchCapUsd: most a paid benchmark stage may cost (estimated); maxPaidBenchPerWeek: paid models measured a week. sourceMaxAgeDays: older sources are skipped. maxOutPricePerM / minContext: what counts as a candidate.",
+    "autoPromoteRoles": ["tester"],
+    "minMargin": 5,
+    "goodEnough": 85,
+    "trialEvery": 5,
+    "paidBenchCapUsd": 0.25,
+    "maxPaidBenchPerWeek": 2,
+    "sourceMaxAgeDays": 180,
+    "maxOutPricePerM": 3,
+    "minContext": 128000
+  },
   "maxRounds": 3,
   "askEachRound": true,
   "timeoutMin": 120,

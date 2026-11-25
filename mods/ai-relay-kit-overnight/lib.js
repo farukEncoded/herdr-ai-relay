@@ -29,6 +29,10 @@ export const modelReportPath = () => join(protocolDir(), "usage", "model-report.
 export const modelReportJsonPath = () => join(protocolDir(), "usage", "model-report.json");
 export const modelReportPs1 = () => join(protocolDir(), "tools", "model-report.ps1");
 export const modelStatsPath = () => join(protocolDir(), "usage", "model-stats.jsonl");
+// The model scout: leaderboard per role, proposals waiting for you, the ledger of changes.
+export const scoutPath = () => join(protocolDir(), "usage", "model-scout.json");
+export const scoutMjs = () => join(protocolDir(), "tools", "model-scout.mjs");
+export async function runScout(extra = []) { await exec("node", [scoutMjs(), ...extra]).catch(() => null); }
 // The setup script ships inside the panel mod's folder (payload/), so it runs before anything is installed.
 export const setupPs1 = () => join(appHome(), "mods", MOD.panel, "payload", "setup.ps1");
 
@@ -275,8 +279,8 @@ export function relayLine(r) {
 export async function readProject(root, machine) {
   const rd = async (...p) => { try { return await readTextFile(join(root, ".ai", ...p), { on: machine }); } catch { return null; } };
   const glob = async (p) => { try { return await readTextFile(p); } catch { return null; } };
-  const [state, log, relay, plan, outlook, report] = await Promise.all([rd("STATE.md"), rd("LOG.md"), rd("relay", "status.json"),
-    glob(planUsagePath()), glob(outlookPath()), glob(modelReportJsonPath())]);
+  const [state, log, relay, plan, outlook, report, scout] = await Promise.all([rd("STATE.md"), rd("LOG.md"), rd("relay", "status.json"),
+    glob(planUsagePath()), glob(outlookPath()), glob(modelReportJsonPath()), glob(scoutPath())]);
   if (state == null) return { root, setup: false };
   const st = parseState(state);
   return {
@@ -284,6 +288,11 @@ export async function readProject(root, machine) {
     next: items(st.sections["next"]), status: items(st.sections["status"]),
     blockers: items(st.sections["blockers"]),
     log: parseLog(log, 4), relay: parseRelay(relay), usage: parseJson(plan), outlook: parseJson(outlook),
+    scout: (() => { const s = parseJson(scout); if (!s) return null;
+      const roles = {}; for (const [k, v] of Object.entries(s.roles ?? {})) roles[k] = { first: v.incumbent?.id ?? null, firstScore: v.incumbent?.quality ?? null,
+        top: (v.leaderboard ?? []).slice(0, 3).map((x) => ({ id: x.id, q: x.quality, free: x.free, cost: x.costPerStage, measured: x.measured })), trial: v.trial ?? null };
+      return { at: s.at, roles, proposals: (s.proposals ?? []).slice(0, 4), queued: (s.benchQueue ?? []).length,
+               sources: (s.sources ?? []).map((x) => `${x.name}: ${x.status}`) }; })(),
     report: (() => { const r = parseJson(report); return r ? { at: r.at, stages: r.stages, cost: r.cost, days: r.days,
       suggestions: Array.isArray(r.suggestions) ? r.suggestions.filter((s) => !/^No relay stages recorded/.test(s)) : [],
       safe: Array.isArray(r.suggestions) ? r.suggestions.filter((s) => /^Remove .* from the OpenCode|: move it down\.$/.test(s)).length : 0 } : null; })(),

@@ -235,7 +235,8 @@ function Parse-Model([string]$text) {
   foreach ($part in ($t -split ',')) {
     $kv = $part.Trim() -split '=', 2
     $role = $kv[0].Trim().ToLower(); $m = $(if ($kv.Count -gt 1) { $kv[1].Trim().ToLower() } else { '' })
-    if ($role -notmatch '^[a-z][a-z0-9-]*$' -or $m -notmatch '^[a-z0-9][a-z0-9.\-]*$') {
+    # '/' and ':' allow full OpenRouter ids for OpenCode (tester=nvidia/nemotron-3-ultra-550b-a55b:free).
+    if ($role -notmatch '^[a-z][a-z0-9-]*$' -or $m -notmatch '^[a-z0-9][a-z0-9.\-/:]*$') {
       throw "Bad -Model part '$part'. Use role=model, e.g. planner=fable or tester=astra."
     }
     $map[$role] = $m
@@ -1086,7 +1087,9 @@ function Plan-Stage($st, [string]$model, [string]$lvl) {
     # The picker chooses the model (free first where allowed, budget, quota); a model you named is kept if usable.
     $want = if ($model -and $model -ne 'default') { $script:modelNames['opencode'][$model] } else { '' }
     if (-not $want -and $model -and $model -ne 'default') { $want = $model }
+    $trial = if (-not $want) { Pick-TrialModel $role } else { '' }
     if ($want -and -not (Quota-Out "opencode/$want")) { $plan.model = $want }
+    elseif ($trial) { $plan.model = $trial; $plan.trial = $true; $plan.info += "trial: $trial for this $role stage (1 in $((Default-Of 'scout' $null).trialEvery) tester stages, picked by the model scout)" }
     else {
       $m = Pick-OpenCodeModel $role
       if ($m) { $plan.model = $m; $plan.info += "OpenCode picked $m for the $role" }
@@ -1251,6 +1254,25 @@ function Free-Allowed {
   return ($f | Where-Object { $_ -ieq (Split-Path $Folder -Leaf) }).Count -gt 0
 }
 # OpenRouter model id for an OpenCode stage of this role, or '' when nothing qualifies. $skip: ids not to use.
+# Trials (D-032): 1 in scout.trialEvery tester stages tries the model scout's trial model (usage/model-scout.json),
+# only on projects that may use free models and only when that model is free, listed with tool calling and not out.
+function Pick-TrialModel([string]$role) {
+  if ($role -ne 'tester' -or -not (Free-Allowed) -or -not (OR-Key)) { return '' }
+  $every = 5; $sc = Default-Of 'scout' $null; if ($sc -and $sc.trialEvery) { $every = [int]$sc.trialEvery }
+  if ($every -le 0) { return '' }
+  $cf = Join-Path $script:usageDir 'trial-counter.json'
+  $n = 0; try { $n = [int](Read-Json $cf).tester } catch {}
+  $n++
+  try { [IO.File]::WriteAllText($cf, ((@{ tester = $n }) | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false))) } catch {}
+  if ($n % $every -ne 0) { return '' }
+  $scout = Read-Json (Join-Path $script:usageDir 'model-scout.json')
+  $t = if ($scout) { [string]$scout.roles.tester.trial } else { '' }
+  if (-not $t -or $t -notlike '*:free') { return '' }
+  $live = Get-ORModels
+  if ($live.Count -and (-not $live.ContainsKey($t) -or -not $live[$t].tools)) { return '' }
+  if (Quota-Out "opencode/$t") { return '' }
+  return $t
+}
 function Pick-OpenCodeModel([string]$role, [string[]]$skip = @()) {
   if (-not (OR-Key)) { return '' }   # no OpenRouter key: OpenCode can't run any model, so it never gets a stage
   $chains = Oc-Of 'models' $null
@@ -1325,6 +1347,7 @@ function Write-StageStats($entry) {
       planBefore = $entry.planBefore; planAfter = $entry.planAfter
       logLines = $entry.logLines; sigOk = [bool]$entry.sigOk; commits = $entry.commits
       compliant = ($entry.state -eq 'done' -and $entry.logLines -gt 0 -and [bool]$entry.sigOk -and $entry.commits -gt 0)
+      trial = [bool]$entry.trial
       overnight = [bool]$Overnight }
     [IO.File]::AppendAllText((Join-Path $script:usageDir 'model-stats.jsonl'), (($row | ConvertTo-Json -Compress) + "`n"), (New-Object System.Text.UTF8Encoding($false)))
   } catch {}
@@ -1620,6 +1643,12 @@ function New-AgentLaunch([string]$agent, [string]$role, [string]$modelName, [str
   if ($agent -eq 'opencode') {
     # OpenCode's interactive mode has no effort flag: the picker gives the executor a strong model instead (D-028).
     # Its first message goes in argv (--prompt); like agy's -i, it must not contain double quotes (Herdr's shell hop).
+    # The relay knows the exact model (also after a switch or takeover), so it hands OpenCode its exact signature:
+    # the LOG line, the commit and the done file then always name the model that did the work (D-032).
+    if ($modelArgs.Count) {
+      $sigText = 'opencode-cli/' + (([string]$modelArgs[-1]) -replace '^openrouter/', '')
+      $msg = "Your protocol signature for this stage is exactly $sigText (it names the OpenRouter model you run on): use it in the LOG line, the commit message and the done file. " + $msg
+    }
     return @{ argv = ($argv + @('--prompt', $msg.Replace('"', "'"))); taskArgs = @(); session = ''
               model = $(if ($modelArgs.Count) { ([string]$modelArgs[-1]) -replace '^openrouter/', '' } else { 'default' }); effort = 'default' }
   }
@@ -1790,7 +1819,7 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
   $entry = [ordered]@{ n = $i; role = $st.Role; agent = $kind; here = $here; label = $label; round = $script:round; task = $script:currentTask
                        model = ''; effort = ''; state = 'running'; started = (Get-Date).ToString('o'); finished = ''
                        minutes = 0; terminal = ''; by = ''; verdict = ''; session = ''; usage = $null; cleaned = @(); switches = @()
-                       planBefore = $null; planAfter = $null; logLines = 0; sigOk = $false; commits = 0 }
+                       planBefore = $null; planAfter = $null; logLines = 0; sigOk = $false; commits = 0; trial = $false }
   # Quality record (D-030): the commit before the stage, to count the agent's own commits after it.
   $headBefore = ''
   try { $hb = Invoke-Native (Get-Command git | Select-Object -First 1).Source @('-C', $Folder, 'rev-parse', 'HEAD') 30; if ($hb.Code -eq 0) { $headBefore = $hb.Out.Trim() } } catch {}
@@ -1842,6 +1871,7 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
   $argv = $L.argv; $taskArgs = $L.taskArgs
   $entry.session = $L.session; $entry.model = $L.model; $entry.effort = $L.effort
   foreach ($nt in $plan.notes) { $entry.switches += "$(Get-Date -Format HH:mm) $nt" }
+  $entry.trial = [bool]$plan.trial
   $argvJson = ConvertTo-Json -InputObject ([object[]]$argv) -Compress
   $tabName = "$i $($st.Role) - $($plan.agent)"
   $effortNote = $(if ($L.model -ne 'default') { ", model $($L.model)" } else { '' }) +

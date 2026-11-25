@@ -20,7 +20,9 @@ and it measures every model so you can see which ones are worth it.
   and Stop); "Plan usage" with 5 h and week bars for Claude and Codex (green, amber ≥70 %, red ≥90 %), under each a
   line "Safe until ~HH:MM at this pace · reserve 25 % kept for you" (or "Over 75 %: new stages go to other agents"),
   Antigravity's outages ("Out: opus until 17:06"), and an OpenCode · OpenRouter row with a paid-budget bar for the
-  week; "Models" (report summary, top three suggestions, Open report / Update / Apply n safe); a ↻ mark in ansi5 on
+  week; "Models" (report summary, top three suggestions, Open report / Update / Apply n safe) and, with OpenCode, a
+  "Model scout" card (time, models queued to measure, Refresh; per role a pill with the first choice and the best
+  two, tooltip with scores; proposals "executor: kimi-k3.1-pro instead of glm-5.3" with Accept / Dismiss 30 days); a ↻ mark in ansi5 on
   stages that fell back (tooltip: what switched and why); "Next"
   (first five of STATE's Next), "Status" (two lines, expandable), "Recent" (last four LOG lines with agent
   icon and role), "Blockers" in the blocked color.

@@ -13,7 +13,7 @@ import {
   activeSpace, spaceDir, findRoot, readProject, join, baseName, samePath, loadRuns,
   continueWith, setupProtocol, getReview, relayControl, openHandoff, openLauncher, openCommands, AGENT_NAME,
   SHARED_FOCUS, focusPanel, onWindows, MOD,
-  notifyPath, parseJson, openModelReport, runModelReport,
+  notifyPath, parseJson, openModelReport, runModelReport, runScout,
 } from "./lib.js";
 import { Setup } from "./setup.js";
 
@@ -364,6 +364,34 @@ export default class AiProject extends View {
         .when(Boolean(rep?.safe), (el) => el.child(btn("rep-apply", "check", `Apply ${rep.safe} safe`, () => refresh(true)))));
   }
 
+  // Model scout (D-032): per role the first choice and the top three; proposals with Accept / Dismiss.
+  scoutCard(t, s) {
+    const short = (id) => String(id ?? "").replace(/^[^/]+\//, "").replace(/:free$/, " (free)");
+    const btn = (id, label, action, primary) => h_flex().id(id).h(22).px(7).items_center().rounded(6)
+      .border(1).border_color(t.border).text_size(11).text_color(primary ? t.foreground : t.muted).cursor_pointer()
+      .hover((st) => st.bg(t.hover).text_color(t.foreground)).on_click(action).child(label);
+    const act = (args) => { this.sig = null; runScout(args).finally(() => { this.sig = null; }); };
+    const roleRow = (role) => {
+      const r = s.roles?.[role]; if (!r) return div();
+      const tip = [`${role}: first ${r.first ?? "-"} (${r.firstScore ?? "no score"})`, ...r.top.map((x) => `${x.id}: ${x.q ?? "-"}${x.measured != null ? ` (measured ${x.measured})` : ""}${x.free ? ", free" : x.cost != null ? `, ~$${x.cost}/stage` : ""}`),
+        r.trial ? `trial model: ${r.trial}` : ""].filter(Boolean).join("\n");
+      return h_flex().id(`scout-${role}`).gap(6).items_center().min_w(0).tooltip(tip)
+        .child(pill(role, roleColor(role, t), { h: 16, size: 10, px: 5 }))
+        .child(div().flex_1().min_w(0).truncate().text_size(10.5).text_color(t.muted).child(`${short(r.first)} · best: ${r.top.slice(0, 2).map((x) => short(x.id)).join(", ")}`));
+    };
+    return v_flex().mx(8).mt(6).p(10).gap(5).rounded(9).bg(t.background).border(1).border_color(t.border).flex_none()
+      .child(h_flex().gap(6).items_center()
+        .child(div().flex_1().text_size(11).text_color(t.muted).tooltip(`Sources:\n${(s.sources ?? []).join("\n")}`).child(`Model scout · ${hhmm(s.at)} · ${s.queued} to measure`))
+        .child(btn("scout-run", "Refresh", () => act([]))))
+      .children(["tester", "executor", "reviewer"].map(roleRow))
+      .children((s.proposals ?? []).map((p, i) => v_flex().id(`prop-${i}`).gap(3).mt(2).p(6).rounded(6).bg(t.raised)
+        .child(div().text_size(10.5).text_color(t.foreground).whitespace_normal().child(`${p.role}: ${short(p.model)} instead of ${short(p.from)}`))
+        .child(div().text_size(10).text_color(t.dim).whitespace_normal().child(`${p.basis}${p.auto ? " · would apply by itself once measured" : ""}`))
+        .child(h_flex().gap(6)
+          .child(btn(`prop-ok-${i}`, "Accept", () => act(["--accept", `${p.role}:${p.model}`]), true))
+          .child(btn(`prop-no-${i}`, "Dismiss 30 days", () => act(["--dismiss", `${p.role}:${p.model}`]))))));
+  }
+
   relayCard(t, r) {
     const stateText = { running: "Running", waiting: "Needs you", paused: "Paused", finished: "Finished", stopped: "Stopped", lost: "Not responding" }[r.state] ?? r.state;
     const stateColor = { running: t.accent, waiting: t.ansi3, paused: t.ansi3, finished: t.muted, stopped: t.dim, lost: t.dim }[r.state] ?? t.dim;
@@ -491,6 +519,7 @@ export default class AiProject extends View {
     rows.push(this.usageCard(t, d.usage, d.outlook));
     rows.push(this.section(t, "sec-models", "Models"));
     rows.push(this.modelsCard(t, d.report));
+    if (d.scout) rows.push(this.scoutCard(t, d.scout));
 
     // Next: the first five items of STATE's ## Next.
     rows.push(this.section(t, "sec-next", "Next"));
