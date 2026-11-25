@@ -136,17 +136,37 @@ export const baseName = (p) => (p ?? "").replace(/[\\/]+$/, "").split(/[\\/]/).p
 const same = (a, b) => (a ?? "").replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase() === (b ?? "").replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
 export const samePath = same;
 
-// Where a space is: its first terminal's live folder (first tab first), else its folder.
+// Where a space is: the live folder of the tab it shows (then the other tabs in order), else its saved folder.
+// Following the shown tab means a space that ever holds two projects shows the one you look at.
 export function spaceDir(space) {
   if (!space) return null;
   const all = panes();
-  for (const tab of space.tabs) {
+  const tabs = [...space.tabs].sort((a, b) => Number(Boolean(b.active)) - Number(Boolean(a.active)));
+  for (const tab of tabs) {
     const p = all.find((x) => x.tab === tab.id && x.terminal && x.cwd);
     if (p) return p.cwd;
   }
   return space.folder || null;
 }
 export const activeSpace = () => spaces().find((s) => s.active) ?? null;
+
+// Does this space belong to the project at root? Yes when at least one of its terminals works in root and none in
+// another project (a parent folder such as home is neutral). Same rule as ai-relay.ps1 Get-ProjectSpace:
+// a space's saved folder can belong to another project, so only live terminal folders count.
+export function spaceHolds(space, root) {
+  if (!space || !root) return false;
+  const norm = (s) => String(s).replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+  const r = norm(root);
+  const tabIds = new Set(space.tabs.map((t) => t.id));
+  let own = 0;
+  for (const p of panes()) {
+    if (!tabIds.has(p.tab) || !p.terminal || !p.cwd) continue;
+    const c = norm(p.cwd);
+    if (c === r || c.startsWith(r + "\\")) own++;
+    else if (!r.startsWith(c + "\\")) return false;
+  }
+  return own > 0;
+}
 
 // The project root for a folder: the nearest folder upward with .ai/STATE.md
 // (so a terminal cd'd into src/ still finds it), never the home folder itself.

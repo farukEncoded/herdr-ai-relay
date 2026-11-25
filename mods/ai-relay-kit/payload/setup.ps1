@@ -21,7 +21,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-$KitVersion = '0.1.1'
+$KitVersion = '0.1.2'
 $Source = $PSScriptRoot
 
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }

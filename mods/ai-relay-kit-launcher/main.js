@@ -7,7 +7,7 @@ import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { spaces, theme, run, closeOverlay, props, pickFolder, readTextFile, appHome, checking } from "herdr";
 import {
-  AGENTS, AGENT_KEYS, ROLES, RELAY_ICON, relayIcon, relayPs1, agentIcon, icon, pill, roleColor, activeSpace, spaceDir, findRoot,
+  AGENTS, AGENT_KEYS, ROLES, RELAY_ICON, relayIcon, relayPs1, agentIcon, icon, pill, roleColor, activeSpace, spaceDir, spaceHolds, findRoot,
   join, baseName, samePath, parseRelay, choiceFor, rememberChoice, isWin, parseJson, relayDefaultsPath, focusPanel, MOD,
 } from "./lib.js";
 
@@ -168,11 +168,9 @@ export default class AiLauncher extends View {
   // The space the relay runs in: the shown one if it's this project, else one already there.
   targetSpace() {
     const all = spaces();
-    if (this.space && all.some((s) => s.id === this.space.id)) {
-      const dir = spaceDir(this.space);
-      if (dir && (samePath(dir, this.root) || dir.toLowerCase().startsWith(this.root.toLowerCase()))) return this.space.id;
-    }
-    return all.find((s) => samePath(spaceDir(s), this.root))?.id ?? null;
+    // Only a space that holds this project alone: never put the relay into another project's space.
+    if (this.space && all.some((s) => s.id === this.space.id) && spaceHolds(this.space, this.root)) return this.space.id;
+    return all.find((s) => spaceHolds(s, this.root))?.id ?? null;
   }
 
   start() {

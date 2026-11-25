@@ -41,10 +41,11 @@ relay before the user answered.
 ## 3. Build the command
 - Stages by run type, in the team's order: full = every role; build = the roles without `once`; review = the judge
   alone (and then `-MaxRounds 0`). Loop = the roles without `once`. Always pass `-Team <name>`.
-- Overnight = add `-Overnight -Until <08:00 | done> -MaxCycles <N | 0 = no limit>` (with queue: `-Queue -Overnight ...`). The relay then shows a pre-flight check in its AI Relay
-  tab and waits for the user's "y" there before the night starts; tell the user to answer it before leaving.
-- Queue = full's stages plus `-Queue` (or `-Tasks T-010,T-011` to queue existing task files without planning). The
-  relay then asks the user to approve the queue in its AI Relay tab before any task starts; tell the user that.
+- Overnight = add `-Overnight -Until <08:00 | done> -MaxCycles <N | 0 = no limit>` (with queue: `-Queue -Overnight ...`).
+  The relay asks exactly ONE question: the pre-flight check ("Start the overnight run? y"). An overnight queue starts
+  without asking to approve the queue. Never tell the user to answer more than once.
+- Queue = full's stages plus `-Queue` (or `-Tasks T-010,T-011` to queue existing task files without planning). Not
+  overnight: the relay asks ONE question, to approve the queue ("y").
 - A role given to "me" is written `role=here`, plus `-HereTerminal $env:HC_TERMINAL_ID -HereAgent <claude|codex|antigravity>`
   (what you are). Model and effort of "here" roles stay as this session has them.
 - Never put double quotes inside -Goal (use ' instead).
@@ -70,11 +71,14 @@ the agent already running keeps its own permission mode; the next stages skip al
 ## 4. Run it once, in the foreground
 It notices it was started by an agent, opens Herdr tab 'AI Relay' in the project's space, prints its terminal and
 exits within seconds (D-005). Don't run it in the background, don't wait on or poll it, don't run it twice.
+It refuses when a relay already runs for this project: tell the user, don't retry. It prints "Where: space ..., tab
+'AI Relay'" and how many answers it needs: repeat those two lines to the user word for word, don't guess them.
 Use the full script path above (`$HOME` doesn't expand in every agent's shell); AI Relay Kit's setup wrote it in. Codex: its sandbox blocks the relay
 (it writes outside the project and talks to Herdr), so request approval to run it outside the sandbox right away.
 
 ## 5. Tell the user, then stop
-One short message: the AI Relay tab, the stages, who does what, and that the AI Project panel shows progress, models,
+One short message: where the relay is (space and tab, as the script printed), what the user must answer there (none
+or one "y", as the script printed), the stages, who does what, and that the AI Project panel shows progress, models,
 effort, tokens and plan usage. If you have a role: end your turn now. The relay pastes your role's task into this
 session when your stage comes. That message is your task: follow it exactly (protocol steps, commit, then the
 `.ai/relay/stage-N.done` file) and stop. Don't start on your role before that message arrives.

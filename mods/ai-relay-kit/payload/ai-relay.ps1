@@ -58,6 +58,8 @@ param(
   [string]$HereAgent = '',      # which agent that is: claude, codex or antigravity
   [string]$Team = '',           # which team's roles, order and jobs (relay-defaults.json "teams"); default "coding"
   [switch]$Queue,               # plan first, then one mini-relay per task, each with the agents its task file names
+  [switch]$PauseOnUnapproved,   # hold the queue if a task still lacks approval after its fix rounds
+  [switch]$KeepPermissions,     # keep normal agent permissions even in overnight mode
   [string]$Tasks = '',          # queue these task ids (e.g. "T-010,T-011") instead of planning them
   [switch]$Overnight,           # unattended: no questions, all permissions skipped, own git branch, watchdog, cycles
   [string]$Until = '',          # overnight: no new task after this time ("08:00"), or "done" = no time limit
@@ -179,7 +181,7 @@ function Apply-Overnight {
   if (-not $script:Until) { $script:Until = [string](Ovn-Of 'until' '07:00') }
   if ($script:MaxCycles -lt 0) { $script:MaxCycles = [int](Ovn-Of 'maxCycles' 3) }
   if (-not $script:boundTimeout) { $script:TimeoutMin = [int](Ovn-Of 'maxStageMinutes' 180) }
-  $script:skipPerms = [bool](Ovn-Of 'skipPermissions' $true)
+  $script:skipPerms = -not $KeepPermissions -and [bool](Ovn-Of 'skipPermissions' $true)
   $script:stallMin = [int](Ovn-Of 'stallMinutes' 30)
   $script:AskEachRound = $false
   Set-NightLimits
@@ -313,6 +315,36 @@ function Herdr([string[]]$cmdArgs) {
   if ($o.PSObject.Properties['error'] -and $o.error) { throw "herdr-app $($cmdArgs[0..1] -join ' ') failed: $($o.error)" }
   return $o
 }
+function New-RelayStageTab([string]$space, [string]$name, [string[]]$argsAfterName) {
+  # A window timeout does not cancel tab.new. Identify the one request by its unique tab name.
+  $uniqueName = "$name [$([guid]::NewGuid().ToString('N').Substring(0, 12))]"
+  try {
+    return Herdr (@('do', 'tab.new', '--space', $space, '--name', $uniqueName) + $argsAfterName)
+  } catch {
+    if ($_.Exception.Message -notmatch '(?i)the window did not answer') { throw }
+  }
+  Write-Host "  Herdr did not acknowledge '$uniqueName'. Looking for the existing tab..." -ForegroundColor Yellow
+  $deadline = (Get-Date).AddMinutes(2)
+  while ((Get-Date) -lt $deadline) {
+    try {
+      $result = Invoke-Native $script:herdrApp @('ls') 8
+      if ($result.Code -eq 0) {
+        $matchingSpace = ($result.Out | ConvertFrom-Json).spaces | Where-Object id -eq $space
+        $tab = $matchingSpace.tabs | Where-Object name -ceq $uniqueName | Select-Object -First 1
+        $terminal = $tab.terminals | Where-Object terminal | Select-Object -First 1 -ExpandProperty terminal
+        if ($terminal) {
+          Write-Host "  Recovered '$uniqueName' in terminal $terminal." -ForegroundColor Green
+          return [pscustomobject]@{ terminal = [string]$terminal }
+        }
+      }
+    } catch {
+      # The window can still be busy or restarting. Retry only the read.
+    }
+    Start-Sleep -Seconds 2
+  }
+  throw "Herdr did not acknowledge '$uniqueName' and it could not be reconciled. Inspect that tab before relaunching."
+}
+
 function Space-Exists([string]$id) {
   if (-not $id) { return $false }
   try { $ls = Herdr @('ls') } catch { return $true }   # can't tell: assume it exists (don't create duplicates)
@@ -362,13 +394,68 @@ function Get-AgentAncestor {
   } catch {}
   return $null
 }
-function Find-HerdrSpace([string]$folder, [string]$name) {
+# The Herdr space a terminal lives in ('' if unknown).
+function Get-TerminalSpace([string]$terminal) {
+  if (-not $terminal) { return '' }
+  $hcExe = Find-Exe 'hc' @("$env:LOCALAPPDATA\Programs\herdr-core")
+  if (-not $hcExe) { return '' }
+  try { $r = Invoke-Native $hcExe @('get', $terminal, '--json') 30 } catch { return '' }
+  $m = [regex]::Match($r.Out, 'herdr\.space"?\s*[:=]\s*"?([A-Za-z0-9_\-]+)')
+  if ($m.Success) { return $m.Groups[1].Value } else { return '' }
+}
+# The project's Herdr space (D-025). A space's saved folder is NOT what the sidebar shows: an unnamed space is
+# called after its first terminal's folder, and its saved folder can belong to another project (matching by saved
+# folder once opened a relay's tabs in the space the sidebar showed as a different project).
+# So judge a space by the terminals running in it: it is this project's when at least one of them works in the
+# project folder and none in another project (a parent folder such as home counts as neutral). $prefer (the space
+# you started from) wins when it qualifies. Mixed or foreign spaces are never used: then a new space is made.
+function Get-ProjectSpace([string]$folder, [string]$name, [string]$prefer = '') {
   $norm = { param($p) ([string]$p).Replace('/', '\').TrimEnd('\').ToLower() }
+  $proj = & $norm $folder
   $spaces = @((Herdr @('ls')).spaces)
-  $hit = $spaces | Where-Object { (& $norm $_.folder) -eq (& $norm $folder) } | Select-Object -First 1
-  if (-not $hit) { $hit = $spaces | Where-Object { $_.name -eq $name } | Select-Object -First 1 }
-  if ($hit) { return [string]$hit.id }
-  return [string](Herdr @('do', 'space.new', '--name', $name, '--folder', $folder, '--focus', 'false')).space
+  $cwd = @{}
+  $hcExe = Find-Exe 'hc' @("$env:LOCALAPPDATA\Programs\herdr-core")
+  if ($hcExe) {
+    try {
+      $r = Invoke-Native $hcExe @('ls') 30
+      foreach ($t in @(($r.Out | ConvertFrom-Json).terminals)) { if ($t.cwd) { $cwd[[string]$t.address] = & $norm $t.cwd } }
+    } catch {}
+  }
+  $rows = foreach ($s in $spaces) {
+    $own = 0; $foreign = @()
+    foreach ($tab in @($s.tabs)) {
+      foreach ($t in @($tab.terminals)) {
+        $c = $cwd[[string]$t.terminal]
+        if (-not $c) { continue }
+        if ($c -eq $proj -or $c.StartsWith($proj + '\')) { $own++ }
+        elseif (-not $proj.StartsWith($c + '\')) { $foreign += $c }
+      }
+    }
+    [pscustomobject]@{ Id = [string]$s.id; Own = $own; Foreign = @($foreign) }
+  }
+  $ok = @($rows | Where-Object { $_.Own -gt 0 -and $_.Foreign.Count -eq 0 })
+  $hit = $ok | Where-Object { $_.Id -eq $prefer } | Select-Object -First 1
+  if (-not $hit) { $hit = $ok | Sort-Object Own -Descending | Select-Object -First 1 }
+  if ($hit) { return $hit.Id }
+  $mixed = @($rows | Where-Object { $_.Own -gt 0 -and $_.Foreign.Count -gt 0 })
+  if ($mixed.Count) {
+    $others = ($mixed | ForEach-Object { $_.Foreign } | ForEach-Object { Split-Path $_ -Leaf } | Select-Object -Unique) -join ', '
+    Write-Host "  Herdr: this project's terminals share a space with another project ($others), so the relay opens its own space '$name'." -ForegroundColor DarkYellow
+  }
+  # A name, so the sidebar shows the project even before the first terminal starts. space.new opens an empty shell
+  # tab; remember it so the caller can close it once the relay's own tab is there.
+  $new = Herdr @('do', 'space.new', '--name', $name, '--folder', $folder, '--focus', 'false')
+  $script:freshSpaceTab = [string]$new.tab
+  return [string]$new.space
+}
+# A relay already running for this project (fresh heartbeat in status.json)? Two relays on one project fight.
+function Get-LiveRelay([string]$folder) {
+  $p = Join-Path $folder '.ai\relay\status.json'
+  if (-not (Test-Path $p)) { return $null }
+  try { $s = Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return $null }
+  if ($s.state -notin @('running', 'waiting', 'paused')) { return $null }
+  try { $age = ((Get-Date) - [datetime]$s.updated).TotalSeconds } catch { return $null }
+  if ($age -lt 90) { return $s } else { return $null }
 }
 if (-not $InHerdrTab) {
   $agent = Get-AgentAncestor
@@ -390,15 +477,30 @@ if (-not $InHerdrTab) {
                  '-Effort', $(if ($Effort.Trim()) { & $q $Effort } else { 'none' }),
                  '-Model', $(if ($Model.Trim()) { & $q $Model } else { 'default' }), '-Team', $Team, '-InHerdrTab')
     if ($Queue) { $relArgs += '-Queue' }
+    if ($PauseOnUnapproved) { $relArgs += '-PauseOnUnapproved' }
+    if ($KeepPermissions) { $relArgs += '-KeepPermissions' }
     if ($Overnight) { $relArgs += @('-Overnight', '-Until', $Until, '-MaxCycles', "$MaxCycles") }
     if ($Tasks.Trim()) { $relArgs += @('-Tasks', ($Tasks -replace '\s', '')) }
     if ($AskEachRound) { $relArgs += '-AskEachRound' }
     if ($NoRulesCheck) { $relArgs += '-NoRulesCheck' }
     if ($HereTerminal) { $relArgs += @('-HereTerminal', $HereTerminal, '-HereAgent', $HereAgent) }
     $argvJson = ConvertTo-Json -InputObject ([object[]]$relArgs) -Compress
-    $space = Find-HerdrSpace $Folder $leaf
-    $tab = Herdr @('do', 'tab.new', '--space', $space, '--name', 'AI Relay', '--folder', $Folder, '--argv', $argvJson, '--focus', 'false')
-    Write-Host "Started by $agent, so the relay now runs in its own Herdr tab 'AI Relay' (terminal $($tab.terminal)) in space '$leaf'."
+    $live = Get-LiveRelay $Folder
+    if ($live) {
+      throw "A relay is already running for $leaf (stage $($live.stage), terminal $($live.relayTerminal)). Stop it first (AI Project panel: Stop), or switch it with -MakeOvernight."
+    }
+    $space = Get-ProjectSpace $Folder $leaf (Get-TerminalSpace $env:HC_TERMINAL_ID)
+    # The relay asks its first question right away when it is overnight (pre-flight) or a queue: show its tab then.
+    $focus = if ($Overnight -or $Queue -or $Tasks.Trim()) { 'true' } else { 'false' }
+    $tab = Herdr @('do', 'tab.new', '--space', $space, '--name', 'AI Relay', '--folder', $Folder, '--argv', $argvJson, '--focus', $focus)
+    if ($script:freshSpaceTab) { try { [void](Herdr @('do', 'tab.close', '--id', $script:freshSpaceTab, '--confirmed', 'true')) } catch {} }
+    $same = ($space -eq (Get-TerminalSpace $env:HC_TERMINAL_ID))
+    Write-Host "Started by $agent, so the relay now runs in its own Herdr tab 'AI Relay' (terminal $($tab.terminal))."
+    Write-Host ("Where: space '$leaf'" + $(if ($same) { ' (this space)' } else { ' (its own space, not this one)' }) + ", tab 'AI Relay'.")
+    $asks = @()
+    if ($Overnight) { $asks += 'the overnight pre-flight (y)' }
+    elseif ($Queue -or $Tasks.Trim()) { $asks += 'approving the task queue (y)' }
+    if ($asks) { Write-Host "It needs ONE answer from the user in that tab before it starts: $($asks -join ', '). The tab is shown now." }
     Write-Host "It keeps running when this agent stops. Watch it in Herdr, or: hc read $($tab.terminal)"
     exit 0
   }
@@ -612,6 +714,10 @@ if ($MaxRounds -gt 0 -and -not ($loopStages | Where-Object { $_.Role -eq $script
 if (-not (Test-Path $Folder)) { New-Item -ItemType Directory -Path $Folder -Force | Out-Null }
 $Folder = (Resolve-Path $Folder).Path
 $relayDir = Join-Path $Folder '.ai\relay'
+$liveRelay = Get-LiveRelay $Folder
+if ($liveRelay) {
+  throw "A relay is already running for $(Split-Path $Folder -Leaf) (stage $($liveRelay.stage), terminal $($liveRelay.relayTerminal)). Stop it first (AI Project panel: Stop), or switch it with -MakeOvernight."
+}
 New-Item -ItemType Directory -Path $relayDir -Force | Out-Null
 Set-Content -Path (Join-Path $relayDir '.gitignore') -Value '*' -Encoding ASCII   # relay files never go into git
 Get-ChildItem $relayDir -Filter 'stage-*.done' -ErrorAction SilentlyContinue | Remove-Item -Force
@@ -1080,16 +1186,18 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
   $effortNote = $(if ($modelArgs.Count) { ", model $($modelArgs[-1])" } else { '' }) +
                 $(if ($lvl -and $lvl -ne 'default') { ", effort $lvl" } else { '' })
   Write-Host "`n[$i] $($st.Role) -> $($st.Agent)$effortNote   ($label, tab '$tabName')" -ForegroundColor Yellow
-  $tabArgs = @('--name', $tabName, '--folder', $Folder, '--argv', $argvJson) + $taskArgs
-  try { $tab = Herdr (@('do', 'tab.new', '--space', $script:spaceId) + $tabArgs) }
+  $tabArgs = @('--folder', $Folder, '--argv', $argvJson) + $taskArgs
+  try { $tab = New-RelayStageTab $script:spaceId $tabName $tabArgs }
   catch {
+    # An unacknowledged command may have created a tab. Never repeat it in a different space.
+    if ($_.Exception.Message -match '(?i)did not acknowledge') { throw }
     # Only if the space is really gone (closed while the relay ran): open a fresh one and retry once.
     # Any other error is real, so stop with it instead of piling up duplicate spaces.
     if (Space-Exists $script:spaceId) { throw }
     Write-Host "  Herdr space $($script:spaceId) is gone - opening a new space for '$name'." -ForegroundColor DarkGray
     $space = Herdr @('do', 'space.new', '--name', $name, '--folder', $Folder)
     $script:spaceId = [string]$space.space
-    $tab = Herdr (@('do', 'tab.new', '--space', $script:spaceId) + $tabArgs)
+    $tab = New-RelayStageTab $script:spaceId $tabName $tabArgs
   }
   Write-Host "  started terminal $($tab.terminal). If its task didn't arrive (e.g. a 'trust this folder?' prompt came first)," -ForegroundColor DarkGray
   Write-Host "  answer the prompt, then paste this into its tab:" -ForegroundColor DarkGray
@@ -1170,21 +1278,12 @@ if ($first.Count -gt 0) { Write-Host ("  first pass : " + (($first | ForEach-Obj
 Write-Host ("  fix loop   : " + (($loopStages | ForEach-Object { "$($_.Role)=$($_.Agent)" }) -join ' -> ') + "   (max $MaxRounds rounds)")
 Write-Host "  stop  : create $stopFile" -ForegroundColor DarkGray
 Write-Host "  pause : create $pauseFile (delete it to continue)" -ForegroundColor DarkGray
-# Reuse the Herdr space you started the relay from, if it is this project's; else open a new space.
-$script:spaceId = $null
-if ($env:HC_TERMINAL_ID -and ((Get-Location).Path -eq $Folder)) {
-  $ErrorActionPreference = 'Continue'
-  $hcExe = Find-Exe 'hc' @("$env:LOCALAPPDATA\Programs\herdr-core")
-  if ($hcExe) {
-    $raw = & $hcExe get $env:HC_TERMINAL_ID --json 2>$null | Out-String
-    $m = [regex]::Match($raw, 'herdr\.space"?\s*[:=]\s*"?([A-Za-z0-9_\-]+)')
-    if ($m.Success) { $script:spaceId = $m.Groups[1].Value }
-  }
-  $ErrorActionPreference = 'Stop'
-}
-if (-not $script:spaceId) {
-  $space = Herdr @('do', 'space.new', '--name', $name, '--folder', $Folder)
-  $script:spaceId = [string]$space.space
+# The project's Herdr space: the one you started the relay from if it holds only this project, else another space
+# of this project's, else a new one (D-025). Stage tabs open there, never in another project's space.
+$hereSpace = Get-TerminalSpace $env:HC_TERMINAL_ID
+$script:spaceId = Get-ProjectSpace $Folder $name $hereSpace
+if ($hereSpace -and $hereSpace -ne $script:spaceId) {
+  Write-Host "  note: this tab isn't in $name's space; the stage tabs open in $name's own space." -ForegroundColor DarkYellow
 }
 $script:n = 0
 $script:relayStart = Get-Date
@@ -1258,6 +1357,39 @@ function Show-Queue {
   $k = 0
   foreach ($t in $script:queueList) { $k++; Write-Host ("  {0}. {1}  {2}`n       {3}" -f $k, $t.id, $t.title, $t.agents) }
 }
+function Test-QueueApproval($task) {
+  $taskPath = Join-Path (Join-Path $Folder '.ai\tasks') $task.file
+  $record = Get-Content -LiteralPath $taskPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+  if ($record -notmatch '(?im)^#\s+[^\r\n]*\bstatus:\s*done\s*$') { return $false }
+  $reviews = [regex]::Matches($record, '(?im)^#{3,6}\s+Review[^\r\n]*\|\s*(APPROVED|CHANGES_REQUESTED)\s*\r?$')
+  return $reviews.Count -gt 0 -and $reviews[$reviews.Count - 1].Groups[1].Value -eq 'APPROVED'
+}
+
+function Wait-QueueApproval($task) {
+  # Keep the heartbeat alive and leave later tasks pending until there is a recorded approval.
+  $why = "$($task.id) needs reviewer approval. Record approval in its task file, then Resume. Stop ends this run."
+  New-Item -ItemType File -Path $pauseFile -Force | Out-Null
+  Write-Host "  PAUSED: $why" -ForegroundColor Magenta
+  Write-Status 'paused' $null '' '' $why
+  Write-NightReport "paused awaiting $($task.id) approval" -IncludeCurrentQueue
+  while ($true) {
+    if (Test-Path -LiteralPath $stopFile) { Check-Controls }
+    if ($Overnight -and (Get-Date) -ge $script:untilAt) { return $false }
+    if (-not (Test-Path -LiteralPath $pauseFile)) {
+      if (Test-QueueApproval $task) {
+        $script:verdict = 'APPROVED'
+        $task.verdict = 'APPROVED'
+        $task.state = 'done'
+        return $true
+      }
+      Write-Host "  Still paused: $why" -ForegroundColor Yellow
+      New-Item -ItemType File -Path $pauseFile -Force | Out-Null
+    }
+    Write-Status 'paused' $null '' '' $why
+    Start-Sleep -Seconds 10
+  }
+}
+
 function Run-Queue {
   $qFile = Join-Path $relayDir 'queue.txt'
   if ($Tasks.Trim()) {
@@ -1305,7 +1437,13 @@ function Run-Queue {
     $t.rounds = $script:jobRounds
     $t.verdict = $(if ($script:verdict) { $script:verdict } else { '' })
     $t.state = $(if ($script:verdict -eq 'APPROVED') { 'done' } else { 'not approved' })
-    if ($t.state -ne 'done' -and $k -lt $script:queueList.Count -and $Overnight) {
+    if ($t.state -ne 'done' -and $PauseOnUnapproved) {
+      if (-not (Wait-QueueApproval $t)) {
+        $script:queueHeld = $true
+        return
+      }
+    }
+    elseif ($t.state -ne 'done' -and $k -lt $script:queueList.Count -and $Overnight) {
       Write-Host "  overnight: $($t.id) was not approved; going on with the next task (it's listed in the morning report)." -ForegroundColor DarkYellow
     }
     elseif ($t.state -ne 'done' -and $k -lt $script:queueList.Count) {
@@ -1379,16 +1517,18 @@ function Start-Overnight {
   Write-Host "  overnight run started on branch $($script:nightBranch)." -ForegroundColor Green
 }
 # The morning report: .ai/relay/overnight-report.md (not committed).
-function Write-NightReport([string]$how) {
+function Write-NightReport([string]$how, [switch]$IncludeCurrentQueue) {
   if (-not $Overnight -or -not $script:nightBranch) { return }
   try {
     $L = @("# Overnight relay report: $name", '',
       "- Branch: ``$($script:nightBranch)`` from ``$($script:nightBase)`` (not pushed). Review: ``git log $($script:nightBase)..$($script:nightBranch)``",
       "- Ran: $($script:nightStart.ToString('ddd dd MMM HH:mm')) to $((Get-Date).ToString('ddd dd MMM HH:mm')), cycles: $($script:cycle), ended: $how",
       "- Goal: $($script:firstGoal)", '')
-    if ($script:allTasks.Count) {
+    $reportTasks = @($script:allTasks)
+    if ($IncludeCurrentQueue) { $reportTasks += @($script:queueList) }
+    if ($reportTasks.Count) {
       $L += '## Tasks', '', '| Task | State | Verdict | Fix rounds | Agents |', '|---|---|---|---|---|'
-      foreach ($t in $script:allTasks) { $L += "| $($t.id) $($t.title) | $($t.state) | $($t.verdict) | $($t.rounds) | $($t.agents) |" }
+      foreach ($t in $reportTasks) { $L += "| $($t.id) $($t.title) | $($t.state) | $($t.verdict) | $($t.rounds) | $($t.agents) |" }
       $L += ''
     }
     $L += '## Stages', '', '| # | Task | Role | Agent | State | Min | Cleaned up |', '|---|---|---|---|---|---|---|'
@@ -1401,6 +1541,7 @@ function Write-NightReport([string]$how) {
     Write-Host "  morning report: $p" -ForegroundColor Cyan
   } catch { Write-Host "  couldn't write the morning report: $($_.Exception.Message)" -ForegroundColor Yellow }
 }
+$script:queueHeld = $false
 $script:allTasks = New-Object System.Collections.ArrayList
 $script:cycle = 1
 $script:firstGoal = $goalText
@@ -1424,6 +1565,14 @@ if ($Queue -or $Tasks.Trim()) {
       throw
     }
     foreach ($t in $script:queueList) { [void]$script:allTasks.Add($t) }
+    if ($script:queueHeld) {
+      $why = "Stopped at the overnight cutoff while $($script:currentTask) still awaited approval."
+      Write-Status 'stopped' $null '' '' $why
+      Write-NightReport $why
+      Write-Host $why -ForegroundColor Yellow
+      Show-Summary
+      exit 0
+    }
     if (-not $Overnight -or ($MaxCycles -gt 0 -and $cycle -ge $MaxCycles) -or (Get-Date) -ge $script:untilAt) { break }
     if (-not @($first | Where-Object { $_.Role -in @($script:teamRoles | Where-Object once | ForEach-Object { $_.role }) })) { break }   # no planner to plan more
   }

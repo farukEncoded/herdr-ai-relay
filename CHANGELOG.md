@@ -1,8 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (2026-11-25)
 
-- **Docs**: a plainer pitch in the README and the herdr.dev gallery text (RECIPE.md): what the relay does for you, in a few lines.
+- **Fix: a relay never lands in another project's space.** Herdr names an unnamed space after its first terminal's
+  folder, while its saved folder can belong to a different project. The relay (and the *Start AI relay* dialog) used
+  the saved folder, so a relay could open its tabs in the space the sidebar showed as another project. Now a space is
+  used only when its running terminals work in this project alone; otherwise the relay opens its own named space
+  (with just the *AI Relay* tab).
+- **One relay per project**: starting a second relay on a project whose relay is still running is refused with a
+  clear message.
+- **Clearer start from an agent**: the relay says where it runs ("space …, tab 'AI Relay'") and how many answers it
+  needs (overnight: one y for the pre-flight; queue: one y), and shows its tab when it asks right away.
+- **Panel**: follows the tab you look at, so it always shows the same project as that tab.
+- **Sturdier stage tabs**: when Herdr is slow to acknowledge a new stage tab, the relay finds it by a unique name
+  instead of opening a duplicate.
+- **New relay options**: `-PauseOnUnapproved` holds a queue when a task is still not approved after its fix rounds
+  (approve it in the task file, then Resume); `-KeepPermissions` keeps normal agent permissions in overnight mode.
+- **Docs**: a plainer pitch in the README and the herdr.dev gallery text (RECIPE.md).
+- **Setup**: the kit version is 0.1.2, so the panel offers to update relay files copied by older versions.
 
 ## 0.1.1 (2026-11-24)
 
