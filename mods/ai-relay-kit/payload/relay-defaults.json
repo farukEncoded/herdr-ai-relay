@@ -36,6 +36,37 @@
     "stallMinutes": 30,
     "maxStageMinutes": 180
   },
+  "fallback": {
+    "_help": "What the relay does when an agent's plan quota runs out (D-027). enabled: false = only wait, as before. waitMinutes: a limit that resets within this many minutes is waited out; a longer one makes the relay switch. models: each agent's model chain, best first (short names: antigravity hydrogen | flash | opus | sonnet | gpt-oss, claude fable | opus | sonnet | haiku, codex sol | astra | terra | luna). Antigravity's Gemini models (hydrogen, flash) share one quota, so its chain moves to Antigravity's Claude models and GPT-OSS. A model out of quota is switched inside the running session (no work lost); when an agent has no model left, another agent takes over the stage (agents: who to try, in order). basicModels may only test, never plan, build or review. lowerEffortAtPercent: when Claude's or Codex's plan use is at least this high, the roles in lowerEffortRoles start one effort step lower (tester down to low; reviewer only in fix rounds, down to medium). The executor and planner never lose effort. Quota planner (D-029): maxWaitMinutes = no stage waits longer for a quota, then it switches; claudeReservePercent = above this share of Claude's 5-hour limit new stages go to other agents, so your own Claude chats keep working (the judge may use Claude up to judgeClaudePercent); predict = before a stage, skip an agent whose plan probably can't finish it (learned from usage/model-stats.jsonl) when its reset is more than maxWaitMinutes away; allOut 'free-models' = when every agent and the OpenRouter budget are out, go on with free OpenRouter models (any role, flagged), 'wait' = wait for the first reset.",
+    "enabled": true,
+    "waitMinutes": 20,
+    "models": {
+      "antigravity": ["hydrogen", "opus", "sonnet", "flash", "gpt-oss"],
+      "claude": [],
+      "codex": []
+    },
+    "basicModels": ["gpt-oss"],
+    "agents": ["codex", "claude", "antigravity", "opencode"],
+    "lowerEffortAtPercent": 85,
+    "lowerEffortRoles": ["tester", "reviewer"],
+    "maxWaitMinutes": 30,
+    "claudeReservePercent": 75,
+    "judgeClaudePercent": 90,
+    "predict": true,
+    "allOut": "free-models"
+  },
+  "opencode": {
+    "_help": "OpenCode on OpenRouter models (D-028). models: per role, best first; the relay takes the first one OpenRouter lists right now with tool calling, that has quota left and that the budget allows, and uses its free ':free' variant when one is listed and the project may use free models. freeModelProjects: project folder names that may use free models (their providers may keep prompts), or 'all'. budgetStopPercent: paid models stop when the key has used this much of its OpenRouter limit; free ones go on. budgetPace: 'weekly' = paid models may only use the share of the monthly limit for the weeks passed so far (unused weeks carry over), 'daily' the same per day, 'none' = only the limit. Every stage of every agent is recorded in usage/model-stats.jsonl; tools/model-report.ps1 turns it into the model report and suggestions (weekly task 'AI relay model report').",
+    "models": {
+      "tester":   ["nvidia/nemotron-3-ultra-550b-a55b:free", "deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash", "z-ai/glm-5.3"],
+      "executor": ["z-ai/glm-5.3", "deepseek/deepseek-v4.1-flash", "moonshotai/kimi-k3.1-pro"],
+      "reviewer": ["z-ai/glm-5.3", "moonshotai/kimi-k3.1-pro"],
+      "planner":  ["z-ai/glm-5.3", "moonshotai/kimi-k3.1-pro"]
+    },
+    "freeModelProjects": [],
+    "budgetStopPercent": 90,
+    "budgetPace": "weekly"
+  },
   "maxRounds": 3,
   "askEachRound": true,
   "timeoutMin": 120,

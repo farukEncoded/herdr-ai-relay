@@ -10,6 +10,8 @@ sends it back for another round, so no agent marks its own homework.
   token and plan limit in one panel.
 - **It keeps going while you sleep.** Overnight mode plans and finishes tasks on its own git branch and leaves you
   a morning report.
+- **Usage limits don't stop it.** When an agent runs out, the relay switches model or hands the stage to another
+  agent, keeps part of Claude's limit free for your own chats, and can use cheap OpenRouter models through OpenCode.
 
 You choose which agent plays each role and how hard each one thinks.
 
@@ -36,6 +38,19 @@ You choose which agent plays each role and how hard each one thinks.
 - **Overnight mode**: run unattended until a time, for a number of cycles, or until done. It works on its own
   branch, a watchdog handles stalls and usage limits, and a report is waiting in the morning. You can **switch a
   relay that is already running** to overnight, or change its limits mid-night.
+- **Quota fallback and planning**: a limit that resets within 20 minutes is waited out; otherwise Antigravity
+  switches model inside its session and a Claude or Codex stage is handed to another agent that continues from the
+  repo's state. No wait lasts over 30 minutes. Before each stage the relay skips an agent that probably can't finish
+  it (learned from your past stages); relay stages use Claude only up to 75 % of its 5-hour limit, so your own
+  Claude chats keep working; near a limit the tester starts one effort step lower (never the executor).
+- **OpenCode + OpenRouter (optional fourth agent)**: the relay picks a cheap OpenRouter model per role from live
+  data (listed now, tool calling, within your key's budget, paced weekly) and measures its exact cost. Free models
+  only for projects you allow.
+- **Model report**: every stage is recorded (model, minutes, tokens, cost, round outcome, quota switches, protocol
+  kept). `tools/model-report.ps1` turns it into a report with charts and suggestions; a weekly task can run it, and
+  the panel's Models card opens it and applies the safe suggestions.
+- **Notifications and estimates**: a toast when a stage switches model, another agent takes over, the relay waits
+  for quota or finishes; the Start dialog estimates minutes, plan use and cost from your past stages.
 - **Stages clean up after themselves**: agents stop the dev servers and test runs they started, and the relay
   stops any they leave behind.
 - **Survives Herdr restarts**: the relay waits for the window to come back. If an error ever ends a relay, the
@@ -53,6 +68,8 @@ You choose which agent plays each role and how hard each one thinks.
   [Codex CLI](https://github.com/openai/codex) (`codex`) or
   [Antigravity CLI](https://antigravity.google/download) (`agy`).
   All three give the most choice; a role can go to any agent you have.
+- Optional: [OpenCode](https://opencode.ai/) (`opencode`) and an [OpenRouter](https://openrouter.ai/) API key in
+  the user environment variable `OPENROUTER_API_KEY` (setup step 6 shows how; give the key a monthly credit limit).
 
 ## Install
 
@@ -145,6 +162,16 @@ when starting a relay overrides it.
 | `model` | `"default"` | `default` or `role=name,...` (Claude `fable`/`opus`/`sonnet`/`haiku`, Codex `sol`/`astra`/`terra`/`luna`, Antigravity `flash`/`sonnet`/`opus`/`gpt-oss`). |
 | `codexApproveForMe` | `true` | Codex stages start with `--approve-for-me`: Codex keeps its sandbox, and its own automatic reviewer answers its approval requests (such as its git commits), so a stage doesn't stop on a prompt each time. |
 | `codexWindowsSandbox` | `"mxc"` | The Windows sandbox Codex stages run in (`-c windows.sandbox=<value>`). `"none"` leaves it to your Codex config. |
+| `fallback.waitMinutes` | `20` | A plan limit that resets within this many minutes is waited out; a longer one makes the relay switch. |
+| `fallback.maxWaitMinutes` | `30` | No quota wait lasts longer; then the relay switches anyway. |
+| `fallback.models` | Antigravity chain | Each agent's model order for in-session switches (Antigravity: `hydrogen`, `opus`, `sonnet`, `flash`, `gpt-oss`). |
+| `fallback.agents` | `codex, claude, antigravity, opencode` | Who takes over a stage when its agent is out, in this order. |
+| `fallback.claudeReservePercent` | `75` | Relay stages use Claude only up to this share of its 5-hour limit (the judge up to `judgeClaudePercent`, 90). |
+| `fallback.lowerEffortRoles` | `tester, reviewer` | Near a limit (`lowerEffortAtPercent`, 85) these start one effort step lower (the reviewer only in fix rounds). |
+| `fallback.allOut` | `"free-models"` | When every agent and the paid budget are out: go on with free OpenRouter models (where allowed), or `"wait"`. |
+| `opencode.models` | per role | OpenRouter model ids per role, best first; the relay takes the first that is listed, has quota and fits the budget. |
+| `opencode.freeModelProjects` | `[]` | Project folder names that may use free models, or `["all"]`. Free providers may keep what they're sent. |
+| `opencode.budgetStopPercent` / `budgetPace` | `90` / `"weekly"` | Paid models stop at this share of the key's limit, and may only use the share for the weeks passed so far. |
 | `overnight.skipPermissions` | `true` | Overnight stages start agents with their permission checks off (see Safety). |
 | `overnight.until` | `"07:00"` | Overnight: no new task after this time, or `"done"` for no time limit. |
 | `overnight.maxCycles` | `3` | Overnight queue: plan-and-run cycles at most, `0` = no limit. |
@@ -197,6 +224,11 @@ overnight on a new branch. The agent already running keeps its own mode.
   An earlier relay install found during setup is backed up first, and your `relay-defaults.json` is never
   overwritten.
 - Setup never downloads anything and never runs a remote installer.
+- **OpenRouter**: your key stays in your user environment; the relay sends it only to openrouter.ai (model list,
+  key limit) and OpenCode uses it for its requests. Give the key a monthly credit limit on OpenRouter. **Free models**
+  are off for every project until you list it in `opencode.freeModelProjects`, because free providers may keep and
+  train on what they receive.
+- Setup step 7 adds two Windows tasks (usage refresh every 10 minutes, weekly model report); Remove deletes them.
 - Plan usage numbers come from files on your computer (Claude's status line, Codex's session files); nothing is sent
   anywhere.
 - The mods run local programs (`powershell`, `hc`, and `rundll32` to open a link in your browser) and read your
@@ -206,6 +238,7 @@ overnight on a new branch. The agent already running keeps its own mode.
 
 1. In the AI Relay panel, click ✦ (*Set up AI relay*) and then **Remove…** twice.
 2. Delete the six `ai-relay-kit*` folders from `~/.config/herdr-app/mods/` and the four keys from your `keys.json`.
+3. If you set one up yourself, remove the `OPENROUTER_API_KEY` user variable.
 
 Your projects' `.ai/` folders stay; they are plain Markdown.
 
@@ -217,9 +250,10 @@ runs check for this in pre-flight and offer to add the trust entry.
 **Codex keeps asking to approve git commands.** Keep `codexApproveForMe` on (the default). If your Codex version
 doesn't know a sandbox mode, set `codexWindowsSandbox` to `"none"`.
 
-**A stage hit my plan's usage limit.** In the daytime the relay asks you what to do once the stage times out.
-Overnight, the watchdog waits for the limit to reset. The panel's Plan usage card shows where you stand.
-Antigravity doesn't report usage.
+**A stage hit my plan's usage limit.** The relay handles it by itself: it waits if the limit resets within 20
+minutes, otherwise it switches model (Antigravity) or hands the stage to another agent, and never waits more than
+30 minutes. You get a notification, and the stage shows a switch mark with the details in its tooltip. Antigravity
+doesn't report usage, so the relay learns its outages from its messages.
 
 **The night stopped early.** Windows Update can restart the PC. Set *Active hours* (Settings → Windows Update) to
 cover the night and keep the PC on power; the relay keeps it awake while it runs. Also check

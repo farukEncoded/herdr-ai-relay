@@ -218,11 +218,15 @@ function Parse-Effort([string]$text) {
   return $map
 }
 # Model per role. Short names per agent (a full model id also works); 'default' = the agent's own setting
-# (today: Claude Opus 5.5, Codex GPT-6.2-Sol, Antigravity Gemini 3.8 Flash).
+# (Claude and Codex: their configured model; Antigravity: the "model" in ~/.gemini/antigravity-cli/settings.json).
 $script:modelNames = @{
   'claude'      = [ordered]@{ fable = 'fable'; opus = 'opus'; sonnet = 'sonnet'; haiku = 'haiku' }
   'codex'       = [ordered]@{ sol = 'gpt-6.2-sol'; astra = 'gpt-6.2-astra'; terra = 'gpt-6.1-terra'; luna = 'gpt-6-luna' }
-  'antigravity' = [ordered]@{ flash = 'gemini-3.8-flash'; sonnet = 'claude-sonnet-4-6'; opus = 'claude-opus-4-6-thinking'; 'gpt-oss' = 'gpt-oss-120b-medium' }
+  'antigravity' = [ordered]@{ hydrogen = 'gemini-4-hydrogen'; flash = 'gemini-3.8-flash'; opus = 'claude-opus-4-6-thinking'
+                              sonnet = 'claude-sonnet-4-6'; 'gpt-oss' = 'gpt-oss-120b-medium' }
+  # OpenRouter model ids (default = the relay's picker, relay-defaults.json "opencode").
+  'opencode'    = [ordered]@{ glm = 'z-ai/glm-5.3'; 'glm-flash' = 'z-ai/glm-5.3-flash'; deepseek = 'deepseek/deepseek-v4.1-flash'
+                              nemotron = 'nvidia/nemotron-3-ultra-550b-a55b:free'; kimi = 'moonshotai/kimi-k3.1-pro'; mimo = 'xiaomi/mimo-v2.6-flash' }
 }
 function Parse-Model([string]$text) {
   $map = [ordered]@{}
@@ -245,8 +249,8 @@ function Model-Args([string]$agent, [string]$name) {
   $id = if ($names.Contains($name)) { $names[$name] } elseif ($name -match '[.\-]') { $name } else {
     throw "Model '$name' isn't a $agent model. Use one of: default, $($names.Keys -join ', '), or a full model id."
   }
-  if ($agent -eq 'antigravity' -and $id -eq 'gemini-3.8-flash') { return @() }   # agy's default; effort picks High/Medium/Low
   if ($agent -eq 'codex') { return @('-m', $id) }
+  if ($agent -eq 'opencode') { return @('--model', "openrouter/$id") }
   return @('--model', $id)
 }
 function Format-Effort($map) {
@@ -359,8 +363,8 @@ function Parse-Stages([string]$spec) {
     $kv = $part.Trim() -split '=', 2
     $ag = if ($kv.Count -eq 2) { $kv[1].Trim().ToLower() } else { '' }
     if ($ag -eq 'here') {
-      if (-not $HereTerminal -or -not $script:agents.ContainsKey($HereAgent)) {
-        throw "Stage '$part' says 'here', so pass -HereTerminal <the agent's HC_TERMINAL_ID> and -HereAgent claude|codex|antigravity."
+      if (-not $HereTerminal -or -not $script:agents.ContainsKey($HereAgent) -or $HereAgent -eq 'opencode') {
+        throw "Stage '$part' says 'here', so pass -HereTerminal <the agent's HC_TERMINAL_ID> and -HereAgent claude|codex|antigravity (opencode can't be 'here')."
       }
     }
     elseif ($kv.Count -ne 2 -or -not $script:agents.ContainsKey($ag)) {
@@ -514,11 +518,12 @@ function Ask([string]$q, [string]$def) {
 }
 function Ask-Agent([string]$role, [string]$def) {
   while ($true) {
-    $a = (Ask ("  {0,-9} c=claude  x=codex  a=antigravity" -f $role) $def).ToLower()
+    $a = (Ask ("  {0,-9} c=claude  x=codex  a=antigravity  o=opencode" -f $role) $def).ToLower()
     if ($a -match '^(c|claude)$') { return 'claude' }
     if ($a -match '^(x|codex)$') { return 'codex' }
     if ($a -match '^(a|antigravity|agy)$') { return 'antigravity' }
-    Write-Host '    please type c, x or a' -ForegroundColor Red
+    if ($a -match '^(o|opencode)$') { return 'opencode' }
+    Write-Host '    please type c, x, a or o' -ForegroundColor Red
   }
 }
 if (-not $Folder -or -not $Goal) {
@@ -569,7 +574,7 @@ if (-not $Folder -or -not $Goal) {
   Write-Host "`nWho does what?"
   $picked = [ordered]@{}
   foreach ($r in $script:teamRoles | Where-Object { $_.role -in $use }) {
-    $def = switch ($r.agent) { 'codex' { 'x' } 'antigravity' { 'a' } default { 'c' } }
+    $def = switch ($r.agent) { 'codex' { 'x' } 'antigravity' { 'a' } 'opencode' { 'o' } default { 'c' } }
     $picked[$r.role] = Ask-Agent $r.role $def
   }
   if ($mode -eq '3') {
@@ -682,6 +687,8 @@ $script:agents = @{
   'codex'       = @('codex', '--no-daemon') + $(if ($script:codexSandbox -and $script:codexSandbox -ne 'none') { @('-c', "windows.sandbox=$($script:codexSandbox)") } else { @() }) +
                   $(if ([bool](Default-Of 'codexApproveForMe' $true)) { @('--approve-for-me') } else { @() })
   'antigravity' = @($(if ($agy) { $agy } else { 'agy' }))
+  # OpenCode on OpenRouter models (D-028): the relay picks the model per stage (Pick-OpenCodeModel).
+  'opencode'    = @('opencode')
 }
 # Overnight: nobody is there to answer, so every agent runs with its permission checks off (user's choice,
 # relay-defaults.json overnight.skipPermissions). Codex then needs no sandbox flags at all.
@@ -690,6 +697,7 @@ if ($Overnight -and $script:skipPerms) {
   $script:agents['claude']      = $script:agents['claude'] + @('--dangerously-skip-permissions')
   $script:agents['codex']       = @('codex', '--no-daemon', '--dangerously-bypass-approvals-and-sandbox')
   $script:agents['antigravity'] = $script:agents['antigravity'] + @('--dangerously-skip-permissions')
+  $script:agents['opencode']    = $script:agents['opencode'] + @('--auto')
 }
 $script:effortByRole = Parse-Effort $Effort
 $script:modelByRole = Parse-Model $Model
@@ -721,6 +729,7 @@ if ($liveRelay) {
 New-Item -ItemType Directory -Path $relayDir -Force | Out-Null
 Set-Content -Path (Join-Path $relayDir '.gitignore') -Value '*' -Encoding ASCII   # relay files never go into git
 Get-ChildItem $relayDir -Filter 'stage-*.done' -ErrorAction SilentlyContinue | Remove-Item -Force
+Get-ChildItem $relayDir -Filter 'stage-*.task.txt' -ErrorAction SilentlyContinue | Remove-Item -Force
 $stopFile  = Join-Path $relayDir 'STOP'
 $pauseFile = Join-Path $relayDir 'PAUSE'
 $overnightFile = Join-Path $relayDir 'OVERNIGHT'   # "Make overnight" (panel button / 'relay overnight')
@@ -807,6 +816,7 @@ function Get-PlanUsage {
 # Tokens (and cost for Claude) used by one stage so far, or $null if unknown.
 function Stage-Usage($h) {
   try {
+    if ($h.agent -eq 'opencode') { return OpenCode-Usage ([datetime]::Parse($h.started)) }
     if ($h.agent -eq 'claude' -and $h.session) {
       $s = Read-Json (Join-Path $script:usageDir "sessions\$($h.session).json")
       if ($s) { return [ordered]@{ tokens = [int64]$s.tokens; cost = [double]$s.cost; context = $s.context } }
@@ -828,6 +838,498 @@ function Stage-Usage($h) {
   return $null
 }
 
+# ---------- model fallback: plan quota runs out (D-027, relay-defaults.json "fallback") ----------
+# Before a stage: an agent (or Antigravity model) known to be out of quota is replaced by the next one in its chain,
+# and near a plan limit some roles start one effort step lower. During a stage: when the agent's screen shows a
+# quota message, a limit that resets soon is waited out; otherwise Antigravity switches model inside the running
+# session (its /model picker), and Claude/Codex (whose limits cover every model) hand the stage to another agent.
+# What ran out, and until when, is kept in usage/quota.json, so every relay on this PC knows it.
+$script:fb = Default-Of 'fallback' $null
+function Fb-Of([string]$k, $d) { if ($script:fb -and $script:fb.PSObject.Properties[$k] -and $null -ne $script:fb.$k) { return $script:fb.$k }; return $d }
+$script:fbOn = [bool](Fb-Of 'enabled' $true)
+$script:fbWait = [int](Fb-Of 'waitMinutes' 20)
+$script:quotaFile = Join-Path $script:usageDir 'quota.json'
+$script:agySettings = Join-Path $HOME '.gemini\antigravity-cli\settings.json'
+$script:agySearch = @{ hydrogen = 'hydrogen'; flash = 'flash'; opus = 'opus'; sonnet = 'sonnet'; 'gpt-oss' = 'gpt' }
+# Antigravity's own default model (its /model picker saves the choice there; the relay puts it back after a switch).
+$script:agyDefaultRaw = ''
+try { if (Test-Path $script:agySettings) { $script:agyDefaultRaw = [string]((Get-Content $script:agySettings -Raw -Encoding UTF8 | ConvertFrom-Json).model) } } catch {}
+# Short model name (hydrogen, opus, sol, ...) from an id or a display name, or '' when unknown.
+function Model-Short([string]$agent, [string]$text) {
+  $t = ([string]$text).ToLower()
+  if (-not $t) { return '' }
+  if ($agent -eq 'antigravity') {
+    foreach ($p in @(@('hydrogen', 'hydrogen'), @('flash', 'flash'), @('opus', 'opus'), @('sonnet', 'sonnet'), @('gpt', 'gpt-oss'))) {
+      if ($t.Contains($p[0])) { return $p[1] }
+    }
+    return ''
+  }
+  foreach ($k in $script:modelNames[$agent].Keys) { if ($t.Contains($k)) { return $k } }
+  return ''
+}
+# Which quota a model uses: Antigravity's Gemini models share one; Claude's and Codex's limits cover all their models.
+function Quota-Key([string]$agent, [string]$short) {
+  if ($agent -eq 'antigravity') { if ($short -in @('hydrogen', 'flash', '')) { return 'antigravity/gemini' } else { return "antigravity/$short" } }
+  if ($agent -eq 'opencode') { return "opencode/$short" }   # OpenRouter: every model has its own limits
+  return $agent
+}
+function Read-Quota {
+  $h = @{}
+  $o = Read-Json $script:quotaFile
+  if ($o) { foreach ($p in $o.PSObject.Properties) { try { $h[$p.Name] = [datetime]$p.Value } catch {} } }
+  return $h
+}
+function Set-Quota([string]$key, [datetime]$until) {
+  $h = Read-Quota; $h[$key] = $until
+  $o = [ordered]@{}; foreach ($k in $h.Keys) { if ($h[$k] -gt (Get-Date)) { $o[$k] = $h[$k].ToString('o') } }
+  try { [IO.File]::WriteAllText($script:quotaFile, ($o | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false))) } catch {}
+}
+# When a quota is back, or $null if it isn't out.
+function Quota-Out([string]$key) {
+  $u = (Read-Quota)[$key]
+  if ($u -and $u -gt (Get-Date)) { return $u }
+  return $null
+}
+# Claude/Codex: out when the relay saw a quota message, or the plan use it reads is at 98 % or more.
+function Agent-Out([string]$agent) {
+  if ($agent -notin @('claude', 'codex')) { return $null }
+  $q = Quota-Out $agent
+  if ($q) { return $q }
+  if (-not $script:usage -or ((Get-Date) - $script:usageAt).TotalMinutes -ge 5) { $script:usage = Get-PlanUsage; $script:usageAt = Get-Date }
+  $v = $script:usage.$agent
+  if (-not $v) { return $null }
+  foreach ($w in @($v.fiveHour, $v.week)) {
+    if ($w -and $w.used -ge 98 -and $w.resets) { $r = [datetime]$w.resets; if ($r -gt (Get-Date)) { return $r } }
+  }
+  return $null
+}
+function Plan-UsedPercent([string]$agent) {
+  if (-not $script:usage -or ((Get-Date) - $script:usageAt).TotalMinutes -ge 5) { $script:usage = Get-PlanUsage; $script:usageAt = Get-Date }
+  $v = $script:usage.$agent
+  if (-not $v) { return -1 }
+  return [double](@($v.fiveHour, $v.week) | Where-Object { $_ } | ForEach-Object { $_.used } | Measure-Object -Maximum).Maximum
+}
+# ---------- quota planner (D-029) ----------
+$script:fbMaxWait = [int](Fb-Of 'maxWaitMinutes' 30)
+# 5-hour window of Claude/Codex: @{ used; resets } or $null.
+function Plan-5h([string]$agent) {
+  if (-not $script:usage -or ((Get-Date) - $script:usageAt).TotalMinutes -ge 5) { $script:usage = Get-PlanUsage; $script:usageAt = Get-Date }
+  $v = $script:usage.$agent
+  if (-not $v -or -not $v.fiveHour) { return $null }
+  return @{ used = [double]$v.fiveHour.used; resets = $(if ($v.fiveHour.resets) { [datetime]$v.fiveHour.resets } else { $null }) }
+}
+# The share of Claude's 5-hour window this role may use: the reserve keeps the rest for the user's own Claude chats.
+function Claude-Cap([string]$role) {
+  if ($role -eq $script:judgeRole) { return [double](Fb-Of 'judgeClaudePercent' 90) }
+  return [double](Fb-Of 'claudeReservePercent' 75)
+}
+# Typical 5-hour plan use of one stage of this agent and role (median of its last 10 recorded stages, else 10 %).
+$script:predCache = $null
+function Predict-Use([string]$agent, [string]$role) {
+  if (-not $script:predCache -or ((Get-Date) - $script:predCache.read).TotalMinutes -ge 10) {
+    $rows = @()
+    $p = Join-Path $script:usageDir 'model-stats.jsonl'
+    if (Test-Path $p) {
+      $rows = @([IO.File]::ReadAllLines($p) | Select-Object -Last 500 | ForEach-Object { try { $_ | ConvertFrom-Json } catch {} } |
+                Where-Object { $null -ne $_.planBefore -and $null -ne $_.planAfter -and [double]$_.planAfter -ge [double]$_.planBefore })
+    }
+    $script:predCache = @{ read = Get-Date; rows = $rows }
+  }
+  $d = @($script:predCache.rows | Where-Object { $_.agent -eq $agent -and $_.role -eq $role } | Select-Object -Last 10 |
+         ForEach-Object { [double]$_.planAfter - [double]$_.planBefore } | Sort-Object)
+  if ($d.Count -lt 3) { return 10.0 }
+  return $d[[math]::Floor($d.Count / 2)]
+}
+# Can this Claude/Codex agent take a stage of this role now? No when its plan is out, when Claude is over the reserve,
+# or (prediction) when the stage probably won't fit before the 5-hour window resets more than maxWaitMinutes away.
+function Agent-Fits([string]$agent, [string]$role) {
+  if ($agent -notin @('claude', 'codex')) { return $true }
+  $out = Agent-Out $agent
+  if ($out -and ($out - (Get-Date)).TotalMinutes -gt $script:fbWait) { return $false }
+  $w = Plan-5h $agent
+  if (-not $w) { return $true }   # no numbers yet (e.g. Claude before its first reply): don't guess
+  $cap = if ($agent -eq 'claude') { Claude-Cap $role } else { 100.0 }
+  $far = (-not $w.resets) -or (($w.resets - (Get-Date)).TotalMinutes -gt $script:fbMaxWait)
+  if ($w.used -ge $cap -and $far) { return $false }
+  if ([bool](Fb-Of 'predict' $true) -and $far -and ($w.used + (Predict-Use $agent $role)) -gt $cap) { return $false }
+  return $true
+}
+# Last resort when every agent and the paid budget are out (allOut 'free-models'): a free OpenRouter model for any role.
+function Pick-FreeModel([string]$role) {
+  if (-not (Get-Command opencode -ErrorAction SilentlyContinue) -or -not (Free-Allowed) -or -not (OR-Key)) { return '' }
+  $live = Get-ORModels
+  $chains = Oc-Of 'models' $null
+  $ids = @()
+  foreach ($r in @($role, 'tester')) { if ($chains -and $chains.PSObject.Properties[$r]) { $ids += @($chains.$r) } }
+  $ids += 'openrouter/free'   # OpenRouter's own router across free tool-calling models
+  foreach ($id in $ids) {
+    foreach ($c in @($(if ($id -like '*:free' -or $id -eq 'openrouter/free') { $id } else { "$id`:free" }))) {
+      if ($live.Count -and -not $live.ContainsKey($c)) { continue }
+      if ($live.Count -and -not $live[$c].tools) { continue }
+      if (Quota-Out "opencode/$c") { continue }
+      return $c
+    }
+  }
+  return ''
+}
+# OpenRouter paid budget: what this period may spend by now (budgetPace weekly/daily/none) and what it has spent.
+function OR-Budget {
+  $k = Get-ORKeyInfo
+  if (-not $k -or -not $k.limit) { return $null }
+  $limit = [double]$k.limit
+  $used = if ($null -ne $k.remaining) { $limit - [double]$k.remaining } else { [double]$k.usage }
+  $now = [datetime]::UtcNow; $dim = [datetime]::DaysInMonth($now.Year, $now.Month)
+  $pace = ([string](Oc-Of 'budgetPace' 'weekly')).ToLower()
+  $share = switch ($pace) {
+    'daily'  { [math]::Min(1.0, $now.Day / $dim) }
+    'none'   { 1.0 }
+    default  { [math]::Min(1.0, ([math]::Floor(($now.Day - 1) / 7) + 1) * 7 / $dim) }
+  }
+  $allowed = [math]::Min($limit * $share, $limit * [double](Oc-Of 'budgetStopPercent' 90) / 100)
+  return [ordered]@{ limit = $limit; used = [math]::Round($used, 4); allowedNow = [math]::Round($allowed, 2); pace = $pace
+                     paidOk = ($used -lt $allowed); reset = $k.reset }
+}
+
+# What the panel shows about quotas (status.json "outlook" and usage/outlook.json): per agent its state, and for Claude
+# and Codex a "safe until" estimate from this relay's own burn rate (5-hour use per minute over the last hour).
+# The burn samples live in usage/burn.json, shared by every relay and the 10-minute refresher (tools/usage-refresh.ps1).
+function Get-Outlook {
+  $o = [ordered]@{ at = (Get-Date).ToString('o') }
+  $burnFile = Join-Path $script:usageDir 'burn.json'
+  $burn = @{ claude = New-Object System.Collections.ArrayList; codex = New-Object System.Collections.ArrayList }
+  $saved = Read-Json $burnFile
+  foreach ($a in @('claude', 'codex')) {
+    if ($saved -and $saved.$a) { foreach ($s in @($saved.$a)) { try { [void]$burn[$a].Add(@{ t = [datetime]$s.t; u = [double]$s.u }) } catch {} } }
+  }
+  foreach ($a in @('claude', 'codex')) {
+    $w = Plan-5h $a
+    if (-not $w) { $o[$a] = $null; continue }
+    $list = $burn[$a]
+    # A new sample only when the reading is newer than the last one (several relays may read the same numbers).
+    if (-not $list.Count -or ((Get-Date) - $list[$list.Count - 1].t).TotalMinutes -ge 2) { [void]$list.Add(@{ t = Get-Date; u = $w.used }) }
+    # A drop means the 5-hour window reset: start the rate again from there.
+    if ($list.Count -gt 1 -and $w.used -lt $list[$list.Count - 2].u) { $last = $list[$list.Count - 1]; $list.Clear(); [void]$list.Add($last) }
+    while ($list.Count -gt 1 -and ((Get-Date) - $list[0].t).TotalMinutes -gt 60) { $list.RemoveAt(0) }
+    $cap = if ($a -eq 'claude') { Claude-Cap 'any' } else { 100.0 }
+    $safe = 'ok'
+    $first = $list[0]; $mins = ((Get-Date) - $first.t).TotalMinutes
+    if ($w.used -ge $cap) { $safe = 'over' }
+    elseif ($mins -ge 5 -and $w.used -gt $first.u) {
+      $eta = (Get-Date).AddMinutes(($cap - $w.used) / (($w.used - $first.u) / $mins))
+      if (-not $w.resets -or $eta -lt $w.resets) { $safe = $eta.ToString('o') }
+    }
+    $wk = $script:usage.$a.week
+    $o[$a] = [ordered]@{ used = $w.used; cap = $cap; resets = $(if ($w.resets) { $w.resets.ToString('o') } else { '' })
+                         week = $(if ($wk) { [double]$wk.used } else { $null }); safeUntil = $safe
+                         out = $(if (Agent-Out $a) { (Agent-Out $a).ToString('o') } else { '' }) }
+  }
+  $q = Read-Quota
+  $o.antigravity = @($q.Keys | Where-Object { $_ -like 'antigravity/*' -and $q[$_] -gt (Get-Date) } | Sort-Object |
+                     ForEach-Object { [ordered]@{ model = $_.Substring(12); until = $q[$_].ToString('o') } })
+  $o.opencode = [ordered]@{ budget = $(try { OR-Budget } catch { $null })
+                            out = @($q.Keys | Where-Object { $_ -like 'opencode/*' -and $q[$_] -gt (Get-Date) } | ForEach-Object { $_.Substring(9) }) }
+  try {
+    $keep = [ordered]@{}
+    foreach ($a in @('claude', 'codex')) { $keep[$a] = @($burn[$a] | ForEach-Object { [ordered]@{ t = $_.t.ToString('o'); u = $_.u } }) }
+    [IO.File]::WriteAllText($burnFile, ($keep | ConvertTo-Json -Compress -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
+  } catch {}
+  return $o
+}
+
+# Next Antigravity model with quota left that may do this role ('' = none).
+function Pick-AgyModel([string]$role) {
+  $basic = @(Fb-Of 'basicModels' @('gpt-oss'))
+  foreach ($m in @((Fb-Of 'models' $null).antigravity)) {
+    $m = ([string]$m).ToLower()
+    if (-not $script:modelNames['antigravity'].Contains($m)) { continue }
+    if ($m -in $basic -and $role -ne 'tester') { continue }
+    if (Quota-Out (Quota-Key 'antigravity' $m)) { continue }
+    return $m
+  }
+  return ''
+}
+# Another agent that can take this role now: @{ agent; model } or $null.
+function Pick-Agent([string]$role, [string]$exclude) {
+  foreach ($a in @(Fb-Of 'agents' @('codex', 'claude', 'antigravity'))) {
+    $a = ([string]$a).ToLower()
+    if ($a -eq $exclude -or -not $script:agents.ContainsKey($a)) { continue }
+    if ($a -eq 'opencode') {
+      if (-not (Get-Command opencode -ErrorAction SilentlyContinue)) { continue }
+      $m = Pick-OpenCodeModel $role
+      if ($m) { return @{ agent = $a; model = $m } }
+      continue
+    }
+    if ($a -eq 'antigravity') {
+      $def = Model-Short 'antigravity' $script:agyDefaultRaw
+      if (-not (Quota-Out (Quota-Key 'antigravity' $def))) { return @{ agent = $a; model = '' } }
+      $m = Pick-AgyModel $role
+      if ($m) { return @{ agent = $a; model = $m } }
+      continue
+    }
+    if (Agent-Fits $a $role) { return @{ agent = $a; model = '' } }   # plan left, Claude reserve, prediction (D-029)
+  }
+  # Everyone is out (plans and the paid OpenRouter budget): free OpenRouter models for any role, flagged (D-029).
+  if (([string](Fb-Of 'allOut' 'free-models')) -eq 'free-models') {
+    $m = Pick-FreeModel $role
+    if ($m) { return @{ agent = 'opencode'; model = $m; lastResort = $true } }
+  }
+  return $null
+}
+# Before a stage: which agent, model and effort, given what is out of quota. Returns @{ agent; model; effort; notes }.
+function Plan-Stage($st, [string]$model, [string]$lvl) {
+  # notes = real fallbacks (shown with the panel's switch mark); info = plain remarks, printed only.
+  $plan = @{ agent = $st.Agent; model = $model; effort = $lvl; notes = @(); info = @() }
+  if (-not $script:fbOn) { return $plan }
+  $role = $st.Role
+  $p = $null   # set here: PowerShell's dynamic scoping would otherwise read a caller's $p below
+  if ($plan.agent -eq 'opencode') {
+    # The picker chooses the model (free first where allowed, budget, quota); a model you named is kept if usable.
+    $want = if ($model -and $model -ne 'default') { $script:modelNames['opencode'][$model] } else { '' }
+    if (-not $want -and $model -and $model -ne 'default') { $want = $model }
+    if ($want -and -not (Quota-Out "opencode/$want")) { $plan.model = $want }
+    else {
+      $m = Pick-OpenCodeModel $role
+      if ($m) { $plan.model = $m; $plan.info += "OpenCode picked $m for the $role" }
+      else {
+        $p = Pick-Agent $role 'opencode'
+        if ($p) { $plan.agent = $p.agent; $plan.model = $p.model; $plan.notes += "no OpenRouter model fits now (budget, quota or listing): $($p.agent) takes the $role stage" }
+        if ($p -and $p.lastResort) { $plan.notes += "every plan and the paid OpenRouter budget are out: running on the free model $($p.model) (last resort)" }
+      }
+    }
+    return $plan
+  }
+  if ($plan.agent -eq 'antigravity') {
+    $cur = if ($model -and $model -ne 'default') { Model-Short 'antigravity' $model } else { Model-Short 'antigravity' $script:agyDefaultRaw }
+    $out = Quota-Out (Quota-Key 'antigravity' $cur)
+    if ($out) {
+      $alt = Pick-AgyModel $role
+      if ($alt) { $plan.model = $alt; $plan.notes += "Antigravity's $(if ($cur) { $cur } else { 'default model' }) is out of quota until $($out.ToString('HH:mm')): using its $alt model" }
+      else {
+        $p = Pick-Agent $role 'antigravity'
+        if ($p) { $plan.agent = $p.agent; $plan.model = $p.model; $plan.notes += "every Antigravity model for this role is out of quota: $($p.agent) takes the $role stage" }
+      }
+    }
+  } elseif ($plan.agent -in @('claude', 'codex')) {
+    if (-not (Agent-Fits $plan.agent $role)) {
+      $w = Plan-5h $plan.agent
+      $why = if ($plan.agent -eq 'claude' -and $w -and $w.used -ge (Claude-Cap $role)) { "Claude is at $([int]$w.used) % of its 5-hour limit (reserve: $([int](Claude-Cap $role)) % for this role, the rest stays for you)" }
+             elseif ($w) { "$($plan.agent) is at $([int]$w.used) % of its 5-hour limit and a $role stage usually takes ~$([int](Predict-Use $plan.agent $role)) %" }
+             else { "$($plan.agent) is out of plan quota" }
+      $p = Pick-Agent $role $plan.agent
+      if ($p) { $plan.notes += "${why}: $($p.agent) takes the $role stage"; $plan.agent = $p.agent; $plan.model = $p.model }
+      else { $plan.info += "$why, but no other agent fits either: starting it anyway (the quota watcher waits at most $($script:fbMaxWait) min)" }
+    }
+  }
+  if ($p -and $p.lastResort) { $plan.notes += "every plan and the paid OpenRouter budget are out: running on the free model $($p.model) (last resort)" }
+  # Near a plan limit: one effort step lower, only where it costs little (D-027). Never the executor or a once-role
+  # (planner); the judge only in fix rounds and not below medium; the tester not below low.
+  $levels = @('low', 'medium', 'high', 'xhigh', 'max')
+  $isOnce = [bool]($script:teamRoles | Where-Object { $_.role -eq $role -and $_.once })
+  $isJudge = ($role -eq $script:judgeRole)
+  $mayLower = ($role -in @(Fb-Of 'lowerEffortRoles' @('tester', 'reviewer'))) -and $role -ne 'executor' -and -not $isOnce -and
+              (-not $isJudge -or $script:round -ge 1)
+  if ($mayLower -and $plan.agent -in @('claude', 'codex') -and $plan.effort -in $levels) {
+    $used = Plan-UsedPercent $plan.agent
+    $floor = if ($isJudge) { 'medium' } else { 'low' }
+    $ix = [array]::IndexOf($levels, $plan.effort)
+    if ($used -ge [double](Fb-Of 'lowerEffortAtPercent' 85) -and $ix -gt [array]::IndexOf($levels, $floor)) {
+      $plan.notes += "$($plan.agent) plan use is at $([int]$used) %: $role effort $($plan.effort) -> $($levels[$ix - 1]) to stretch the quota"
+      $plan.effort = $levels[$ix - 1]
+    }
+  }
+  return $plan
+}
+# Antigravity: switch the running session's model with its /model picker (search, Enter), then put the saved
+# default back (the picker saves its choice as the default for every new session). $true when the screen confirms.
+function Switch-AgyModel([string]$terminal, [string]$short) {
+  $hcExe = Find-Exe 'hc' @("$env:LOCALAPPDATA\Programs\herdr-core")
+  $search = $script:agySearch[$short]; if (-not $search) { return $false }
+  [void](Invoke-Native $hcExe @('send', $terminal, '/model') 60)   # hc send submits it; no extra Enter (that would pick the current model)
+  Start-Sleep -Seconds 3
+  [void](Invoke-Native $hcExe (@('keys', $terminal) + @($search.ToCharArray() | ForEach-Object { [string]$_ })) 30)
+  Start-Sleep -Seconds 2
+  $scr = (Invoke-Native $hcExe @('read', $terminal, '--lines', '12') 30).Out
+  if ($scr -notmatch "(?i)Search:\s*$([regex]::Escape($search))") { [void](Invoke-Native $hcExe @('keys', $terminal, 'escape') 30); return $false }
+  [void](Invoke-Native $hcExe @('keys', $terminal, 'enter') 30)
+  Start-Sleep -Seconds 2
+  $scr = (Invoke-Native $hcExe @('read', $terminal, '--lines', '40') 30).Out
+  $ok = ($scr -match '(?i)Model set to') -and ((Model-Short 'antigravity' ([regex]::Matches($scr, '(?i)Model set to ([^\r\n]+)') | Select-Object -Last 1).Groups[1].Value) -eq $short)
+  if ($script:agyDefaultRaw -and (Test-Path $script:agySettings)) {
+    try {
+      $raw = Get-Content $script:agySettings -Raw -Encoding UTF8
+      $fixed = [regex]::Replace($raw, '("model"\s*:\s*)"[^"]*"', { param($m) $m.Groups[1].Value + (ConvertTo-Json $script:agyDefaultRaw) }, 1)
+      if ($fixed -ne $raw) { [IO.File]::WriteAllText($script:agySettings, $fixed, (New-Object System.Text.UTF8Encoding($false))) }
+    } catch {}
+  }
+  return $ok
+}
+# Minutes until a quota is back, read from the agent's screen ("Resets in 2h20m59s", "try again in 45 min"), else from
+# the plan use the relay reads; -1 when unknown.
+function Reset-Minutes([string]$agent, [string]$screen) {
+  # OpenRouter's daily cap on free models resets at midnight UTC.
+  if ($screen -match '(?i)free-models-per-day') { return [int][math]::Ceiling(([datetime]::UtcNow.Date.AddDays(1) - [datetime]::UtcNow).TotalMinutes) }
+  $m = [regex]::Matches($screen, '(?i)(?:resets?|try again) in\s*(?:(\d+)\s*h(?:ours?|rs?)?)?\s*(?:(\d+)\s*m(?:in(?:utes?|s)?)?)?\s*(?:(\d+)\s*s(?:ec(?:onds?|s)?)?)?') | Select-Object -Last 1
+  if ($m -and ($m.Groups[1].Success -or $m.Groups[2].Success)) {
+    return [int]$m.Groups[1].Value * 60 + [int]$m.Groups[2].Value + [int]([int]$m.Groups[3].Value -gt 0)
+  }
+  if ($agent -in @('claude', 'codex')) {
+    $script:usage = Get-PlanUsage; $script:usageAt = Get-Date
+    $v = $script:usage.$agent
+    $r = @($v.fiveHour, $v.week) | Where-Object { $_ -and $_.resets -and $_.used -ge 95 } | ForEach-Object { [datetime]$_.resets } |
+         Where-Object { $_ -gt (Get-Date) } | Sort-Object | Select-Object -First 1
+    if ($r) { return [int][math]::Ceiling(($r - (Get-Date)).TotalMinutes) }
+  }
+  return -1
+}
+
+# ---------- OpenCode on OpenRouter: live model list, budget, picker (D-028, relay-defaults.json "opencode") ----------
+# Before each OpenCode stage the relay picks the first model of the role's chain that OpenRouter lists right now with
+# tool calling, that has quota left (usage/quota.json), that the budget allows (paid models stop at budgetStopPercent of
+# the key's limit) and, for a project allowed to use free models, its ":free" variant when one is listed. The model
+# list is cached for 6 hours (usage/openrouter-models.json); prices are kept once a day (usage/openrouter-prices.jsonl)
+# for the model report. The key is read from OPENROUTER_API_KEY and only sent to openrouter.ai.
+$script:oc = Default-Of 'opencode' $null
+function Oc-Of([string]$k, $d) { if ($script:oc -and $script:oc.PSObject.Properties[$k] -and $null -ne $script:oc.$k) { return $script:oc.$k }; return $d }
+function OR-Key { if ($env:OPENROUTER_API_KEY) { return $env:OPENROUTER_API_KEY }; return [Environment]::GetEnvironmentVariable('OPENROUTER_API_KEY', 'User') }
+$script:orModels = $null
+function Get-ORModels {
+  if ($script:orModels -and ((Get-Date) - $script:orModels.read).TotalMinutes -lt 30) { return $script:orModels.list }
+  $cache = Join-Path $script:usageDir 'openrouter-models.json'
+  $c = Read-Json $cache
+  $fresh = $c -and $c.at -and ((Get-Date) - [datetime]$c.at).TotalHours -lt 6
+  if (-not $fresh) {
+    try {
+      $r = Invoke-RestMethod -Uri 'https://openrouter.ai/api/v1/models' -TimeoutSec 60
+      $list = @($r.data | ForEach-Object {
+        [ordered]@{ id = [string]$_.id; name = [string]$_.name; ctx = [int64]$_.context_length
+                    tools = (@($_.supported_parameters) -contains 'tools')
+                    inPrice = [math]::Round([double]$_.pricing.prompt * 1e6, 4); outPrice = [math]::Round([double]$_.pricing.completion * 1e6, 4) } })
+      $c = [ordered]@{ at = (Get-Date).ToString('o'); models = $list }
+      [IO.File]::WriteAllText($cache, ($c | ConvertTo-Json -Depth 4 -Compress), (New-Object System.Text.UTF8Encoding($false)))
+      Save-ORPrices $list
+      $c = Read-Json $cache
+    } catch { Write-Host "  OpenRouter model list not reachable ($($_.Exception.Message)); using the last one." -ForegroundColor DarkYellow }
+  }
+  $h = @{}
+  if ($c) { foreach ($m in @($c.models)) { $h[[string]$m.id] = $m } }
+  $script:orModels = @{ read = Get-Date; list = $h }
+  return $h
+}
+# Once a day: today's prices of the models the relay may pick plus every free tool-calling model (for the report).
+function Save-ORPrices($list) {
+  $p = Join-Path $script:usageDir 'openrouter-prices.jsonl'
+  $day = (Get-Date).ToString('yyyy-MM-dd')
+  if ((Test-Path $p) -and ((Get-Item $p).LastWriteTime.ToString('yyyy-MM-dd') -eq $day)) { return }
+  $want = @{}
+  foreach ($r in @((Oc-Of 'models' $null).PSObject.Properties)) { foreach ($id in @($r.Value)) { $want[[string]$id] = $true; $want["$id`:free"] = $true } }
+  $rows = foreach ($m in $list) {
+    if ($want.ContainsKey($m.id) -or ($m.id -like '*:free' -and $m.tools)) {
+      ([ordered]@{ day = $day; id = $m.id; inPrice = $m.inPrice; outPrice = $m.outPrice; ctx = $m.ctx; tools = $m.tools } | ConvertTo-Json -Compress)
+    }
+  }
+  if ($rows) { [IO.File]::AppendAllText($p, (($rows -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false))) }
+}
+$script:orKey = $null
+# The key's limit and use, or $null. Cached 5 minutes.
+function Get-ORKeyInfo {
+  if ($script:orKey -and ((Get-Date) - $script:orKey.read).TotalMinutes -lt 5) { return $script:orKey.info }
+  $k = OR-Key
+  $info = $null
+  if ($k) {
+    try {
+      $d = (Invoke-RestMethod -Uri 'https://openrouter.ai/api/v1/key' -Headers @{ Authorization = "Bearer $k" } -TimeoutSec 30).data
+      $info = [ordered]@{ limit = $d.limit; usage = [double]$d.usage; remaining = $d.limit_remaining; reset = [string]$d.limit_reset }
+    } catch {}
+  }
+  $script:orKey = @{ read = Get-Date; info = $info }
+  return $info
+}
+# May this project send its code to free models (whose providers may keep it)? relay-defaults opencode.freeModelProjects.
+function Free-Allowed {
+  $f = @(Oc-Of 'freeModelProjects' @('all'))
+  if ($f -contains 'all') { return $true }
+  return ($f | Where-Object { $_ -ieq (Split-Path $Folder -Leaf) }).Count -gt 0
+}
+# OpenRouter model id for an OpenCode stage of this role, or '' when nothing qualifies. $skip: ids not to use.
+function Pick-OpenCodeModel([string]$role, [string[]]$skip = @()) {
+  if (-not (OR-Key)) { return '' }   # no OpenRouter key: OpenCode can't run any model, so it never gets a stage
+  $chains = Oc-Of 'models' $null
+  $chain = @()
+  if ($chains -and $chains.PSObject.Properties[$role]) { $chain = @($chains.$role) }
+  elseif ($chains -and $chains.PSObject.Properties['tester']) { $chain = @($chains.tester) }
+  $live = Get-ORModels
+  # Paid models only while this period's spend is under the paced share (weekly by default) and under budgetStopPercent.
+  $bud = OR-Budget
+  $budgetLow = $bud -and -not $bud.paidOk
+  $free = Free-Allowed
+  foreach ($id in $chain) {
+    $id = [string]$id
+    $cands = @()
+    if ($free -and $id -notlike '*:free' -and $live.ContainsKey("$id`:free")) { $cands += "$id`:free" }
+    $cands += $id
+    foreach ($c in $cands) {
+      if ($c -in $skip) { continue }
+      if ($live.Count -and -not $live.ContainsKey($c)) { continue }        # not listed now
+      if ($live.Count -and -not $live[$c].tools) { continue }              # a coding agent needs tool calling
+      if (Quota-Out "opencode/$c") { continue }
+      $isFree = ($c -like '*:free') -or ($live.Count -and $live[$c].outPrice -eq 0 -and $live[$c].inPrice -eq 0)
+      if ($isFree -and -not $free) { continue }
+      if (-not $isFree -and $budgetLow) { continue }
+      return $c
+    }
+  }
+  return ''
+}
+# Tokens and exact cost of the OpenCode sessions started in this project since a stage began (from opencode export).
+function OpenCode-Usage([datetime]$since) {
+  $exe = Get-Command opencode -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $exe) { return $null }
+  $bin = $exe.Source
+  if ($bin -like '*.ps1' -or $bin -like '*.cmd') {
+    $cand = Join-Path (Split-Path $bin) 'node_modules\opencode-ai\bin\opencode.exe'
+    if (Test-Path $cand) { $bin = $cand } else { return $null }
+  }
+  $old = [Environment]::CurrentDirectory
+  try {
+    [Environment]::CurrentDirectory = $Folder
+    $r = Invoke-Native $bin @('session', 'list', '--format', 'json', '-n', '20') 60
+    # ForEach-Object unrolls the array (Windows PowerShell 5.1's ConvertFrom-Json passes a JSON array on as one object).
+    $ses = @(($r.Out.Substring([Math]::Max(0, $r.Out.IndexOf('[')))) | ConvertFrom-Json | ForEach-Object { $_ })
+    $tok = 0; $cost = 0.0; $models = @{}
+    foreach ($s in $ses) {
+      if ([string]$s.directory -ne $Folder) { continue }
+      if ([DateTimeOffset]::FromUnixTimeMilliseconds([int64]$s.created).LocalDateTime -lt $since.AddSeconds(-30)) { continue }
+      $e = Invoke-Native $bin @('export', [string]$s.id) 120
+      $j = $e.Out.Substring([Math]::Max(0, $e.Out.IndexOf('{'))) | ConvertFrom-Json
+      foreach ($m in @($j.messages)) {
+        $i = $m.info
+        if ($i.role -ne 'assistant') { continue }
+        $cost += [double]$i.cost; $tok += [int64]$i.tokens.total
+        if ($i.modelID) { $models[[string]$i.modelID] = $true }
+      }
+    }
+    return [ordered]@{ tokens = $tok; cost = [math]::Round($cost, 5); models = @($models.Keys) }
+  } catch { return $null } finally { [Environment]::CurrentDirectory = $old }
+}
+
+# ---------- performance record: one line per finished stage, every agent (usage/model-stats.jsonl) ----------
+# tools/model-report.ps1 turns it into the model report (pass rates, minutes, cost, quota trouble, prices).
+function Write-StageStats($entry) {
+  try {
+    $row = [ordered]@{ at = (Get-Date).ToString('o'); project = (Split-Path $Folder -Leaf); relay = $script:relayStart.ToString('o')
+      task = [string]$entry.task; round = [int]$entry.round; n = [int]$entry.n; role = $entry.role; agent = $entry.agent
+      model = [string]$entry.model; effort = [string]$entry.effort; minutes = $entry.minutes; state = $entry.state
+      verdict = [string]$entry.verdict; judge = ($entry.role -eq $script:judgeRole); switches = @($entry.switches).Count
+      tokens = $(if ($entry.usage -and $entry.usage.tokens) { [int64]$entry.usage.tokens } else { $null })
+      cost = $(if ($entry.usage -and $null -ne $entry.usage.cost) { [double]$entry.usage.cost } else { $null })
+      planBefore = $entry.planBefore; planAfter = $entry.planAfter
+      logLines = $entry.logLines; sigOk = [bool]$entry.sigOk; commits = $entry.commits
+      compliant = ($entry.state -eq 'done' -and $entry.logLines -gt 0 -and [bool]$entry.sigOk -and $entry.commits -gt 0)
+      overnight = [bool]$Overnight }
+    [IO.File]::AppendAllText((Join-Path $script:usageDir 'model-stats.jsonl'), (($row | ConvertTo-Json -Compress) + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+  } catch {}
+}
+
 # Live status for Herdr panels: .ai/relay/status.json (never committed; .ai/relay is git-ignored)
 $script:history = New-Object System.Collections.ArrayList
 $script:queueList = New-Object System.Collections.ArrayList
@@ -840,6 +1342,11 @@ function Write-Status([string]$state, $st = $null, [string]$label = '', [string]
       [IO.File]::WriteAllText((Join-Path $script:usageDir 'plan.json'), ($script:usage | ConvertTo-Json -Compress -Depth 5),
         (New-Object System.Text.UTF8Encoding($false)))
       foreach ($h in $script:history) { if ($h.state -eq 'running' -or -not $h.usage) { $h.usage = Stage-Usage $h } }
+      try {
+        $script:outlook = Get-Outlook
+        [IO.File]::WriteAllText((Join-Path $script:usageDir 'outlook.json'), ($script:outlook | ConvertTo-Json -Compress -Depth 5),
+          (New-Object System.Text.UTF8Encoding($false)))
+      } catch {}
     }
     $o = [ordered]@{
       state    = $state                     # running | waiting | paused | finished | stopped
@@ -877,6 +1384,7 @@ function Write-Status([string]$state, $st = $null, [string]$label = '', [string]
       queue    = @($script:queueList)       # queue mode: one entry per task (id, title, agents, state, verdict)
       currentTask = $script:currentTask
       usage    = $script:usage
+      outlook  = $script:outlook            # quota planner (D-029): states, safe-until, Antigravity outages, OpenRouter budget
     }
     $json = $o | ConvertTo-Json -Compress -Depth 6
     [IO.File]::WriteAllText((Join-Path $relayDir 'status.json'), $json, (New-Object System.Text.UTF8Encoding($false)))
@@ -889,6 +1397,7 @@ function Set-NightAgents {
   if ($script:agents['claude'] -notcontains '--dangerously-skip-permissions') { $script:agents['claude'] = $script:agents['claude'] + @('--dangerously-skip-permissions') }
   $script:agents['codex'] = @('codex', '--no-daemon', '--dangerously-bypass-approvals-and-sandbox')
   if ($script:agents['antigravity'] -notcontains '--dangerously-skip-permissions') { $script:agents['antigravity'] = $script:agents['antigravity'] + @('--dangerously-skip-permissions') }
+  if ($script:agents['opencode'] -notcontains '--auto') { $script:agents['opencode'] = $script:agents['opencode'] + @('--auto') }
 }
 function Keep-Awake {
   # ES_CONTINUOUS | ES_SYSTEM_REQUIRED: Windows doesn't sleep while this process runs; ends with the process.
@@ -1037,7 +1546,10 @@ function Stop-StageLeftovers([string]$terminal, [datetime]$since) {
 # Every minute it reads the stage agent's screen. Plan limit text ("usage limit", "rate limit", ...): wait (up to the
 # reset time Claude/Codex reported, checking every 30 min) and then tell the agent to carry on. No change on screen for
 # stallMinutes: interrupt the agent and tell it to finish; the second time, give up on the stage.
-function Reset-Watch { $script:watch = @{ last = ''; changed = Get-Date; checked = [datetime]::MinValue; nudges = 0; limit = $false; limitNudge = [datetime]::MinValue } }
+function Reset-Watch {
+  $script:watch = @{ last = ''; changed = Get-Date; checked = [datetime]::MinValue; nudges = 0; limit = $false; limitNudge = [datetime]::MinValue
+                     qchecked = [datetime]::MinValue; seen = @{}; handled = $false; qlast = ''; limitSince = $null }
+}
 function Send-Agent([string]$terminal, [string]$text) {
   $hcExe = Find-Exe 'hc' @("$env:LOCALAPPDATA\Programs\herdr-core")
   [void](Invoke-Native $hcExe @('send', $terminal, $text, '--force') 120)
@@ -1059,24 +1571,11 @@ function Watch-Stage([string]$terminal, [string]$kind, [int]$i, $st, [string]$la
   if (((Get-Date) - $w.checked).TotalSeconds -lt 60 -or -not $terminal) { return 'ok' }
   $w.checked = Get-Date
   $hcExe = Find-Exe 'hc' @("$env:LOCALAPPDATA\Programs\herdr-core")
-  $r = Invoke-Native $hcExe @('read', $terminal, '--lines', '40') 30
+  try { $r = Invoke-Native $hcExe @('read', $terminal, '--lines', '40') 90 } catch { return 'ok' }   # skip this minute (see Check-StageQuota)
   $screen = ($r.Out -replace '\s+', ' ').Trim()
   $tail = if ($screen.Length -gt 1500) { $screen.Substring($screen.Length - 1500) } else { $screen }
   if ($screen -ne $w.last) { $w.last = $screen; $w.changed = Get-Date }
-  # Plan limit reached: wait, nudging every 30 min, until the agent works again.
-  if ($tail -match '(?i)usage limit|rate limit|limit reached|reached your .{0,20}limit|out of (credits|usage)|quota (exceeded|exhausted)|resets? (at|in) \d|try again (at|in) \d') {
-    if (-not $w.limit) {
-      $w.limit = $true; $w.limitNudge = Get-Date
-      Write-Host "  $kind hit a plan limit; waiting for it to reset (about $(Limit-ResetText $kind))." -ForegroundColor Magenta
-    }
-    Write-Status 'running' $st $label $terminal
-    if (((Get-Date) - $w.limitNudge).TotalMinutes -ge 30) {
-      $w.limitNudge = Get-Date; $w.changed = Get-Date
-      Send-Agent $terminal "Your usage limit should have reset by now. Please carry on with your $($st.Role) work, then finish the end-of-session steps and create .ai/relay/stage-$i.done."
-    }
-    return 'ok'
-  }
-  if ($w.limit) { $w.limit = $false; Write-Host '  plan limit over; the agent is working again.' -ForegroundColor Magenta }
+  if ($w.limit) { $w.changed = Get-Date; return 'ok' }   # waiting out a plan limit (Check-StageQuota): not a stall
   # No change on screen for stallMinutes: nudge once, then give up on the stage.
   if (((Get-Date) - $w.changed).TotalMinutes -ge $script:stallMin) {
     if ($w.nudges -ge 1) {
@@ -1091,6 +1590,177 @@ function Watch-Stage([string]$terminal, [string]$kind, [int]$i, $st, [string]$la
       "and create .ai/relay/stage-$i.done as your last action.")
   }
   return 'ok'
+}
+
+# A notification for the user (D-030): appended to usage/notify.jsonl; the Herdr panel shows each new line as a toast
+# (click = the stage's tab), whichever project you are looking at.
+function Notify-User([string]$title, [string]$body, [string]$level = 'warning', [string]$terminal = '') {
+  try {
+    $n = [ordered]@{ id = [guid]::NewGuid().ToString('N').Substring(0, 12); at = (Get-Date).ToString('o'); project = (Split-Path $Folder -Leaf)
+                     title = $title; body = $body; level = $level; terminal = $terminal }
+    $p = Join-Path $script:usageDir 'notify.jsonl'
+    [IO.File]::AppendAllText($p, (($n | ConvertTo-Json -Compress) + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+    # Keep the file small: the last 200 lines.
+    $all = [IO.File]::ReadAllLines($p)
+    if ($all.Count -gt 400) { [IO.File]::WriteAllLines($p, [string[]]($all | Select-Object -Last 200)) }
+  } catch {}
+}
+# Everything needed to start one agent for one role: argv (+ Herdr --task args), and what to show as model/effort.
+function New-AgentLaunch([string]$agent, [string]$role, [string]$modelName, [string]$lvl, [string]$msg) {
+  $argv = [object[]]$script:agents[$agent]
+  $modelArgs = @(Model-Args $agent $modelName)
+  $argv = $argv + $modelArgs
+  # The executor's mistakes cost whole fix rounds: it always thinks at high or above (user's rule, D-008).
+  if ($role -eq 'executor' -and $lvl -notin @('xhigh', 'max')) { $lvl = 'high' }
+  # Antigravity's non-Gemini models reject --effort and silently fall back to Gemini, so none for them.
+  if ($agent -eq 'antigravity') {
+    $short = if ($modelArgs.Count) { Model-Short 'antigravity' ([string]$modelArgs[-1]) } else { Model-Short 'antigravity' $script:agyDefaultRaw }
+    if ($short -and $short -notin @('hydrogen', 'flash')) { $lvl = '' }
+  }
+  if ($agent -eq 'opencode') {
+    # OpenCode's interactive mode has no effort flag: the picker gives the executor a strong model instead (D-028).
+    # Its first message goes in argv (--prompt); like agy's -i, it must not contain double quotes (Herdr's shell hop).
+    return @{ argv = ($argv + @('--prompt', $msg.Replace('"', "'"))); taskArgs = @(); session = ''
+              model = $(if ($modelArgs.Count) { ([string]$modelArgs[-1]) -replace '^openrouter/', '' } else { 'default' }); effort = 'default' }
+  }
+  if ($lvl -and $lvl -ne 'default') {
+    if ($agent -eq 'codex') { $argv = $argv + @('-c', "model_reasoning_effort=$lvl") }
+    else { $argv = $argv + @('--effort', $lvl) }   # claude and agy take the same flag
+  }
+  $session = ''
+  if ($agent -eq 'claude') {
+    # Our own session id + a status line that saves Claude's usage numbers for the panel.
+    $session = [guid]::NewGuid().ToString()
+    $argv = $argv + @('--session-id', $session, '--settings', $script:claudeSettings)
+  }
+  $taskArgs = @('--task', $msg)
+  # Claude and Codex take Herdr's first message (--task). Antigravity CLI only accepts an interactive first prompt
+  # through -i, so it goes in argv. Herdr starts argv through the tab's shell, and Windows PowerShell drops double
+  # quotes inside arguments on that hop, so the -i message must not contain double quotes.
+  if ($agent -eq 'antigravity') { $argv = $argv + @('-i', $msg.Replace('"', "'")); $taskArgs = @() }
+  return @{ argv = $argv; taskArgs = $taskArgs; session = $session
+            model = $(if ($modelArgs.Count) { [string]$modelArgs[-1] } else { 'default' })
+            effort = $(if ($lvl -and $lvl -ne 'default') { $lvl } else { 'default' }) }
+}
+# Every minute while a stage runs: did its agent run out of plan quota? Waits, switches Antigravity's model in the
+# session, or hands the stage to another agent (D-027). Returns the new terminal after a takeover, else $null.
+# Counted as a quota only when the agent stopped working and its last screen says so (an agent writing about
+# "rate limits" in its own code must not trigger it); Antigravity numbers each message (Error ID), so a message
+# that was already handled and is still on screen doesn't count twice.
+function Check-StageQuota([string]$terminal, [string]$kind, $entry, $st, [int]$i, [string]$msg, [bool]$here) {
+  $w = $script:watch
+  if (((Get-Date) - $w.qchecked).TotalSeconds -lt 60 -or -not $terminal) { return $null }
+  $w.qchecked = Get-Date
+  $hcExe = Find-Exe 'hc' @("$env:LOCALAPPDATA\Programs\herdr-core")
+  # A watcher must never stop the relay: a slow or failed screen read (2026-11-25: hc read of a busy OpenCode tab
+  # took over 30 s) just skips this minute's check.
+  try { $screen = (Invoke-Native $hcExe @('read', $terminal, '--lines', '40') 90).Out }
+  catch { Write-Host "  (couldn't read the stage's screen this minute: $($_.Exception.Message))" -ForegroundColor DarkGray; return $null }
+  $flat = ($screen -replace '\s+', ' ').Trim()
+  $tail = if ($flat.Length -gt 700) { $flat.Substring($flat.Length - 700) } else { $flat }
+  $state = ''
+  try { $state = [string]((Invoke-Native $hcExe @('get', $terminal, '--json') 30).Out | ConvertFrom-Json).status.state } catch {}
+  # Seen 2026-11-25: Antigravity "Individual quota reached ... Resets in 2h45m" and "Your AI credits balance is too low".
+  $rx = '(?i)usage limit|limit reached|quota (reached|exceeded|exhausted)|out of (credits|usage|quota)|reached your .{0,30}limit|hit your .{0,30}limit|' +
+        '(credits?|credit balance|balance) (is )?too low|not enough (credits|quota)|insufficient (credits|quota|balance)'
+  $ids = @([regex]::Matches($tail, 'Error ID:\s*([0-9A-Za-z\-]+)') | ForEach-Object { $_.Groups[1].Value })
+  $fresh = @($ids | Where-Object { -not $w.seen.ContainsKey($_) })
+  foreach ($x in $ids) { $w.seen[$x] = $true }
+  # OpenRouter's errors as OpenCode shows them. Herdr reports no state for OpenCode, so for it "stopped" means the
+  # screen did not change since the last check a minute ago.
+  if ($kind -eq 'opencode') {
+    $rx += '|rate limit exceeded|free-models-per-day|requires more credits|insufficient credits|payment required|key limit exceeded'
+    if ($flat -ne $w.qlast) { $state = 'working' }
+  }
+  $w.qlast = $flat
+  $isLimit = ($tail -match $rx) -and $state -ne 'working'
+  if ($isLimit -and $ids.Count -and -not $fresh.Count -and -not $w.limit) { $isLimit = $false }   # old, handled message
+  if (-not $isLimit) {
+    if ($w.limit) { $w.limit = $false; Write-Host '  plan limit over; the agent is working again.' -ForegroundColor Magenta }
+    $w.limitSince = $null
+    return $null
+  }
+  $capped = $false
+  if ($w.limit) {
+    # Already waiting it out. No wait lasts longer than maxWaitMinutes (D-029): then switch like a far-off reset.
+    if (-not $here -and $script:fbOn -and $w.limitSince -and ((Get-Date) - $w.limitSince).TotalMinutes -ge $script:fbMaxWait) {
+      Write-Host "  waited $($script:fbMaxWait) min for the quota: switching instead." -ForegroundColor Magenta
+      $w.limit = $false; $capped = $true
+    } else {
+      # Nudge every 30 min (the limit may have reset without the agent noticing).
+      if (((Get-Date) - $w.limitNudge).TotalMinutes -ge 30) {
+        $w.limitNudge = Get-Date; $w.changed = Get-Date
+        Send-Agent $terminal "Your usage limit should have reset by now. Please carry on with your $($st.Role) work, then finish the end-of-session steps and create .ai/relay/stage-$i.done."
+      }
+      return $null
+    }
+  }
+  $mins = Reset-Minutes $kind $screen
+  $until = if ($mins -ge 0) { (Get-Date).AddMinutes($mins) } else { (Get-Date).AddMinutes(60) }   # unknown: assume an hour
+  $cur = ''
+  if ($kind -eq 'antigravity') {
+    $f = [regex]::Matches($screen, '(?m)(?:auto|accept-edits|plan|default)\s+\S{1,2}\s+([^\r\n]+?)\s*(?:\S{1,2}\s+(?:low|medium|high|xhigh|max))?\s*$') | Select-Object -Last 1
+    $cur = if ($f) { Model-Short 'antigravity' $f.Groups[1].Value } else { '' }
+    if (-not $cur) { $cur = Model-Short 'antigravity' $(if ($entry.model -ne 'default') { $entry.model } else { $script:agyDefaultRaw }) }
+  }
+  if ($kind -eq 'opencode') { $cur = [string]$entry.model }
+  Set-Quota (Quota-Key $kind $cur) $until
+  $resetText = if ($mins -ge 0) { "back at $($until.ToString('HH:mm'))" } else { 'reset time unknown' }
+  Write-Host "  $kind ran out of plan quota$(if ($cur) { " on $cur" }) ($resetText)." -ForegroundColor Magenta
+  $wait = (-not $script:fbOn) -or $here -or ($mins -ge 0 -and $mins -le $script:fbWait -and -not $capped)
+  if (-not $wait -and $kind -eq 'antigravity') {
+    $alt = Pick-AgyModel $st.Role
+    if ($alt -and $alt -ne $cur) {
+      if (Switch-AgyModel $terminal $alt) {
+        $note = "$(Get-Date -Format HH:mm) Antigravity $(if ($cur) { $cur } else { 'model' }) out of quota ($resetText): switched this session to $alt"
+        $entry.model = $script:modelNames['antigravity'][$alt]
+        if ($alt -notin @('hydrogen', 'flash')) { $entry.effort = 'default' }
+        $entry.switches += $note
+        Notify-User "$(Split-Path $Folder -Leaf): Antigravity switched model" "Stage $i ($($st.Role)): $(if ($cur) { $cur } else { 'model' }) out of quota ($resetText), now on $alt." 'info' $terminal
+        Write-Host "  switched this Antigravity session to $alt; telling it to carry on." -ForegroundColor Magenta
+        Start-Sleep -Seconds 2
+        Send-Agent $terminal ("Your previous model ran out of quota, so this session now runs on $alt. Carry on with your $($st.Role) work " +
+          "exactly where you stopped, then finish every end-of-session step and, as your very last action, create .ai/relay/stage-$i.done whose first line is your signature.")
+        $w.changed = Get-Date
+        return $null
+      }
+      Write-Host "  couldn't switch the model inside the Antigravity session." -ForegroundColor DarkYellow
+    }
+  }
+  $p = $null
+  if (-not $wait -and $kind -eq 'opencode') {
+    # Next OpenRouter model for this role (OpenCode can't switch inside a session from here): a fresh OpenCode tab.
+    $alt = Pick-OpenCodeModel $st.Role @($cur)
+    if ($alt) { $p = @{ agent = 'opencode'; model = $alt } }
+  }
+  if (-not $wait -and -not $p) { $p = Pick-Agent $st.Role $kind }
+  if (-not $p) {
+    $w.limit = $true; $w.limitNudge = Get-Date
+    if (-not $w.limitSince) { $w.limitSince = Get-Date }   # the 30-minute cap counts from the first wait
+    $why = if ($here) { 'your own session' } elseif (-not $script:fbOn) { 'fallback is off' } elseif ($mins -ge 0 -and $mins -le $script:fbWait) { "it resets within $($script:fbWait) min" } else { 'no other agent has quota left' }
+    Write-Host "  waiting for the quota to come back ($why)." -ForegroundColor Magenta
+    if ($why -eq 'no other agent has quota left') {
+      Notify-User "$(Split-Path $Folder -Leaf): relay is waiting for quota" "Stage $i ($($st.Role)): $kind is out ($resetText) and no other agent or free model can take over." 'error' $terminal
+    }
+    return $null
+  }
+  # Hand the stage to another agent: same stage, same done file; the new agent continues from the repo's state.
+  Stop-Agent $terminal
+  $take = "The $kind agent stopped in the middle of this stage because its plan quota ran out ($resetText). You take over its stage. " +
+          "First look at git status, git diff and the newest .ai/HANDOFF.md and task-file notes to see what it already did; keep its good work and finish the rest. "
+  $lvl = if ($entry.effort -in @('low', 'medium', 'high', 'xhigh', 'max')) { $entry.effort } else { [string]$script:effortByRole[$st.Role] }
+  $L = New-AgentLaunch $p.agent $st.Role $p.model $lvl ($take + $msg)
+  $argvJson = ConvertTo-Json -InputObject ([object[]]$L.argv) -Compress
+  $tab = New-RelayStageTab $script:spaceId "$i $($st.Role) - $($p.agent) (takeover)" (@('--folder', $Folder, '--argv', $argvJson) + $L.taskArgs)
+  $note = "$(Get-Date -Format HH:mm) $kind out of quota ($resetText): $($p.agent) took over" +
+          $(if ($p.lastResort) { " on the free model $($p.model) (every plan and the paid budget were out)" } else { '' })
+  $entry.agent = $p.agent; $entry.model = $L.model; $entry.effort = $L.effort; $entry.session = $L.session
+  $entry.terminal = [string]$tab.terminal; $entry.switches += $note
+  Write-Host "  $($p.agent) takes over stage $i in terminal $($tab.terminal) (tab '$i $($st.Role) - $($p.agent) (takeover)')." -ForegroundColor Magenta
+  Notify-User "$(Split-Path $Folder -Leaf): $($p.agent) took over stage $i" "$kind ran out of quota ($resetText) during the $($st.Role) stage." `
+    $(if ($p.lastResort) { 'error' } else { 'warning' }) ([string]$tab.terminal)
+  $w.limit = $false; $w.limitSince = $null; $w.changed = Get-Date
+  return [string]$tab.terminal
 }
 
 function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
@@ -1119,7 +1789,11 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
   $kind = if ($here) { $HereAgent } else { $st.Agent }   # claude | codex | antigravity
   $entry = [ordered]@{ n = $i; role = $st.Role; agent = $kind; here = $here; label = $label; round = $script:round; task = $script:currentTask
                        model = ''; effort = ''; state = 'running'; started = (Get-Date).ToString('o'); finished = ''
-                       minutes = 0; terminal = ''; by = ''; verdict = ''; session = ''; usage = $null; cleaned = @() }
+                       minutes = 0; terminal = ''; by = ''; verdict = ''; session = ''; usage = $null; cleaned = @(); switches = @()
+                       planBefore = $null; planAfter = $null; logLines = 0; sigOk = $false; commits = 0 }
+  # Quality record (D-030): the commit before the stage, to count the agent's own commits after it.
+  $headBefore = ''
+  try { $hb = Invoke-Native (Get-Command git | Select-Object -First 1).Source @('-C', $Folder, 'rev-parse', 'HEAD') 30; if ($hb.Code -eq 0) { $headBefore = $hb.Out.Trim() } } catch {}
   [void]$script:history.Add($entry)
   if ($here) {
     # This stage runs in the agent session that started the relay: send it the task, no new tab.
@@ -1157,35 +1831,27 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
     $tab = [pscustomobject]@{ terminal = $HereTerminal }
     $entry.terminal = $HereTerminal; $entry.model = 'its own'; $entry.effort = 'its own'
   } else {
-  $argv = [object[]]$script:agents[$st.Agent]
-  $modelArgs = @(Model-Args $st.Agent $script:modelByRole[$st.Role])
-  $argv = $argv + $modelArgs
-  $lvl = $script:effortByRole[$st.Role]
-  # The executor's mistakes cost whole fix rounds: it always thinks at high or above (user's rule, D-008).
-  if ($st.Role -eq 'executor' -and $lvl -notin @('xhigh', 'max')) { $lvl = 'high' }
-  # Antigravity's non-Gemini models reject --effort and silently fall back to Gemini, so none for them.
-  if ($st.Agent -eq 'antigravity' -and $modelArgs.Count -gt 0) { $lvl = '' }
-  if ($lvl -and $lvl -ne 'default') {
-    if ($st.Agent -eq 'codex') { $argv = $argv + @('-c', "model_reasoning_effort=$lvl") }
-    else { $argv = $argv + @('--effort', $lvl) }   # claude and agy take the same flag
-  }
-  if ($st.Agent -eq 'claude') {
-    # Our own session id + a status line that saves Claude's usage numbers for the panel.
-    $entry.session = [guid]::NewGuid().ToString()
-    $argv = $argv + @('--session-id', $entry.session, '--settings', $script:claudeSettings)
-  }
-  $entry.model = $(if ($modelArgs.Count) { [string]$modelArgs[-1] } else { 'default' })
-  $entry.effort = $(if ($lvl -and $lvl -ne 'default') { $lvl } else { 'default' })
-  $taskArgs = @('--task', $msg)
-  # Herdr starts argv through the tab's shell, and Windows PowerShell drops double quotes inside
-  # arguments on that hop (tested: apostrophes, $, `, ;, |, &, (), unicode all arrive intact).
-  # So the -i message must not contain double quotes.
-  if ($st.Agent -eq 'antigravity') { $argv = $argv + @('-i', $msg.Replace('"', "'")); $taskArgs = @() }
+  # Which agent, model and effort, given what is out of plan quota right now (D-027).
+  $plan = Plan-Stage $st ([string]$script:modelByRole[$st.Role]) ([string]$script:effortByRole[$st.Role])
+  $kind = $plan.agent
+  $entry.agent = $plan.agent
+  # 5-hour plan use before the stage (Claude/Codex): with the value after it, the prediction learns (D-029).
+  $pb = if ($kind -in @('claude', 'codex')) { Plan-5h $kind } else { $null }
+  $entry.planBefore = $(if ($pb) { $pb.used } else { $null })
+  $L = New-AgentLaunch $plan.agent $st.Role $plan.model $plan.effort $msg
+  $argv = $L.argv; $taskArgs = $L.taskArgs
+  $entry.session = $L.session; $entry.model = $L.model; $entry.effort = $L.effort
+  foreach ($nt in $plan.notes) { $entry.switches += "$(Get-Date -Format HH:mm) $nt" }
   $argvJson = ConvertTo-Json -InputObject ([object[]]$argv) -Compress
-  $tabName = "$i $($st.Role) - $($st.Agent)"
-  $effortNote = $(if ($modelArgs.Count) { ", model $($modelArgs[-1])" } else { '' }) +
-                $(if ($lvl -and $lvl -ne 'default') { ", effort $lvl" } else { '' })
-  Write-Host "`n[$i] $($st.Role) -> $($st.Agent)$effortNote   ($label, tab '$tabName')" -ForegroundColor Yellow
+  $tabName = "$i $($st.Role) - $($plan.agent)"
+  $effortNote = $(if ($L.model -ne 'default') { ", model $($L.model)" } else { '' }) +
+                $(if ($L.effort -ne 'default') { ", effort $($L.effort)" } else { '' })
+  Write-Host "`n[$i] $($st.Role) -> $($plan.agent)$effortNote   ($label, tab '$tabName')" -ForegroundColor Yellow
+  foreach ($nt in $plan.info) { Write-Host "  $nt." -ForegroundColor DarkCyan }
+  foreach ($nt in $plan.notes) { Write-Host "  fallback: $nt." -ForegroundColor Magenta }
+  if ($plan.notes.Count) {
+    Notify-User "$name`: stage $i ($($st.Role)) uses $($plan.agent)" ($plan.notes -join '; ') $(if (($plan.notes -join ' ') -match 'last resort') { 'error' } else { 'info' })
+  }
   $tabArgs = @('--folder', $Folder, '--argv', $argvJson) + $taskArgs
   try { $tab = New-RelayStageTab $script:spaceId $tabName $tabArgs }
   catch {
@@ -1199,9 +1865,10 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
     $script:spaceId = [string]$space.space
     $tab = New-RelayStageTab $script:spaceId $tabName $tabArgs
   }
-  Write-Host "  started terminal $($tab.terminal). If its task didn't arrive (e.g. a 'trust this folder?' prompt came first)," -ForegroundColor DarkGray
-  Write-Host "  answer the prompt, then paste this into its tab:" -ForegroundColor DarkGray
-  Write-Host "  $msg" -ForegroundColor DarkGray
+  # The full task goes to a file instead of the screen (D-030: a readable relay tab).
+  $taskFile = Join-Path $relayDir "stage-$i.task.txt"
+  try { [IO.File]::WriteAllText($taskFile, $msg, (New-Object System.Text.UTF8Encoding($false))) } catch {}
+  Write-Host "  terminal $($tab.terminal) - task in .ai\relay\stage-$i.task.txt (paste it into the tab if a first-run question swallowed it)" -ForegroundColor DarkGray
   $entry.terminal = [string]$tab.terminal
   }
 
@@ -1209,10 +1876,15 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
   $script:stageStart = $start
   Write-Status 'running' $st $label ([string]$tab.terminal)
   $logBefore = Count-Lines (Join-Path $Folder '.ai\LOG.md')
-  if ($Overnight) { Reset-Watch }
+  Reset-Watch
   while (-not (Test-Path $marker)) {
     Start-Sleep -Seconds 10
     Write-Status 'running' $st $label ([string]$tab.terminal)   # heartbeat: 'updated' older than ~1 min = relay not running
+    # Plan quota ran out? Wait, switch model, or hand the stage to another agent (every mode, not only overnight).
+    $newTerm = $null
+    try { $newTerm = Check-StageQuota ([string]$tab.terminal) $kind $entry $st $i $msg $here }
+    catch { Write-Host "  quota check failed this minute ($($_.Exception.Message)); the stage goes on." -ForegroundColor DarkGray }
+    if ($newTerm) { $tab = [pscustomobject]@{ terminal = $newTerm }; $kind = $entry.agent; Write-Status 'running' $st $label $newTerm }
     if ((Test-Path $stopFile) -and -not $stopNoted) { Write-Host '  STOP requested - will stop when this stage finishes.' -ForegroundColor Red; $stopNoted = $true }
     if (Test-Path $overnightFile) { $was = [bool]$Overnight; Convert-ToOvernight; if (-not $was) { Reset-Watch; $start = Get-Date } }
     if ($Overnight) {
@@ -1233,7 +1905,9 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
       $start = Get-Date
     }
   }
-  $lines = if (Test-Path $marker) { @(Get-Content $marker) } else { @('(skipped)') }
+  # @() outside the if: an if-expression unrolls a one-line file to a plain string, and [0] was then its first letter
+  # ("done by c" instead of the signature).
+  $lines = @(if (Test-Path $marker) { Get-Content $marker } else { '(skipped)' })
   $who = ([string]$lines[0]).Trim()
   $extra = ''
   if ($st.Role -eq $script:judgeRole) {
@@ -1242,6 +1916,15 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
     $extra = "  |  verdict: $($script:verdict)"
   }
   $added = (Count-Lines (Join-Path $Folder '.ai\LOG.md')) - $logBefore
+  # Did the agent follow the protocol? A LOG line, a signature like "codex-cli/gpt-6", its own commit(s).
+  $entry.logLines = [int][math]::Max(0, $added)
+  $entry.sigOk = ($who -match '^[a-z]+(-[a-z]+)?/[\w.:\-]+')
+  if ($headBefore) {
+    try {
+      $rc = Invoke-Native (Get-Command git | Select-Object -First 1).Source @('-C', $Folder, 'rev-list', '--count', "$headBefore..HEAD") 30
+      if ($rc.Code -eq 0) { $entry.commits = [int]$rc.Out.Trim() }
+    } catch {}
+  }
   $entry.state = $(if (Test-Path $marker) { 'done' } else { 'skipped' })
   # A finished stage must not leave servers or test runs behind for the next one (a skipped stage may still be working).
   # ForEach-Object unrolls the list the function returns (else 'cleaned' becomes [[...]] and looks non-empty).
@@ -1251,6 +1934,13 @@ function Run-Stage($st, [string]$label, [string]$next, [string]$context) {
   $entry.by = $who
   if ($st.Role -eq $script:judgeRole) { $entry.verdict = $script:verdict }
   $entry.usage = Stage-Usage $entry
+  if ($null -ne $entry.planBefore -and $entry.agent -in @('claude', 'codex')) {
+    $script:usage = Get-PlanUsage; $script:usageAt = Get-Date
+    $pa = Plan-5h $entry.agent
+    # A window that reset during the stage gives a lower value: no usable measure then.
+    $entry.planAfter = $(if ($pa -and $pa.used -ge $entry.planBefore) { $pa.used } else { $null })
+  }
+  Write-StageStats $entry   # the model report's raw data (D-028)
   $script:usageAt = [datetime]::MinValue   # refresh plan usage now
   Write-Status 'running' $st $label ([string]$tab.terminal)
   Write-Host ("  done by {0}  |  {1} new LOG line(s)  |  {2:N0} min{3}" -f $who, $added, ((Get-Date) - $start).TotalMinutes, $extra) -ForegroundColor Green
@@ -1274,6 +1964,12 @@ trap {
   break
 }
 Write-Host "`nRelay for '$name'" -ForegroundColor Cyan
+# The weekly model report's suggestions (tools/model-report.ps1, D-028): one line, so they don't go unseen.
+try {
+  $mr = Read-Json (Join-Path $script:usageDir 'model-report.json')
+  $real = @($mr.suggestions | Where-Object { $_ -notlike 'No relay stages recorded*' })
+  if ($real.Count) { Write-Host "  model report ($(([datetime]$mr.at).ToString('dd MMM'))): $($real.Count) suggestion(s) in $(Join-Path $script:usageDir 'model-report.html')" -ForegroundColor DarkCyan }
+} catch {}
 if ($first.Count -gt 0) { Write-Host ("  first pass : " + (($first | ForEach-Object { "$($_.Role)=$($_.Agent)" }) -join ' -> ')) }
 Write-Host ("  fix loop   : " + (($loopStages | ForEach-Object { "$($_.Role)=$($_.Agent)" }) -join ' -> ') + "   (max $MaxRounds rounds)")
 Write-Host "  stop  : create $stopFile" -ForegroundColor DarkGray
@@ -1338,7 +2034,7 @@ function Read-QueueTask([string]$id) {
       $role = $m.Groups[1].Value.ToLower(); $ag = $m.Groups[2].Value.ToLower()
       if ($ag -eq 'agy') { $ag = 'antigravity' }
       if ($ag -eq 'here' -and -not $HereTerminal) { throw "Task $id gives $role to 'here', but no -HereTerminal was passed." }
-      if ($ag -ne 'here' -and -not $script:agents.ContainsKey($ag)) { throw "Task ${id}: unknown agent '$ag' for $role (claude, codex, antigravity)." }
+      if ($ag -ne 'here' -and -not $script:agents.ContainsKey($ag)) { throw "Task ${id}: unknown agent '$ag' for $role (claude, codex, antigravity, opencode)." }
       $agents[$role] = $ag
     }
   }
@@ -1578,6 +2274,8 @@ if ($Queue -or $Tasks.Trim()) {
   }
   Write-Host "`n== Queue finished ==" -ForegroundColor Cyan
   Write-Status 'finished'
+  $doneN = @($script:allTasks | Where-Object { $_.state -eq 'done' }).Count
+  Notify-User "$name`: queue finished" "$doneN of $(@($script:allTasks).Count) task(s) done." $(if ($doneN -eq @($script:allTasks).Count) { 'success' } else { 'warning' }) ([string]$env:HC_TERMINAL_ID)
   foreach ($t in $script:allTasks) { Write-Host ("  {0,-8} {1,-13} {2}" -f $t.id, $t.state, $t.title) -ForegroundColor $(if ($t.state -eq 'done') { 'Green' } else { 'Yellow' }) }
   Write-NightReport 'finished'
   Show-Summary
@@ -1590,6 +2288,9 @@ Write-NightReport 'finished'
 
 Write-Host "`n== Relay finished ==" -ForegroundColor Cyan
 Write-Status 'finished'
+Notify-User "$name`: relay finished" $(if ($script:verdict -eq 'APPROVED') { "$($script:judgeRole) approved after $round fix round(s)." }
+  elseif ($script:verdict) { "Still CHANGES_REQUESTED after $round fix round(s): see .ai/HANDOFF.md." } else { 'All stages done.' }) `
+  $(if ($script:verdict -and $script:verdict -ne 'APPROVED') { 'warning' } else { 'success' }) ([string]$env:HC_TERMINAL_ID)
 if ($script:verdict -eq 'APPROVED') { Write-Host "Verdict ($($script:judgeRole)): APPROVED" -ForegroundColor Green }
 elseif ($script:verdict) { Write-Host "Verdict ($($script:judgeRole)): CHANGES_REQUESTED after $round fix round(s). See .ai/HANDOFF.md to decide what's next." -ForegroundColor Yellow }
 Show-Summary

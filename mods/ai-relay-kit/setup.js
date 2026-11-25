@@ -171,9 +171,39 @@ export class Setup {
     rows.push(this.card(t, 5, "Herdr + menu", [
       div().text_size(11.5).text_color(t.muted).whitespace_normal().child(
         `Adds ${[...names, "AI Relay"].join(", ")} to Herdr's + menu (programs.json). Entries you already have are kept.`),
-      h_flex().gap(8).items_center().child(i.programs?.managed && e.relay ? this.done(t, "Added")
+      h_flex().gap(8).items_center().child(e.relay ? this.done(t, i.programs?.managed ? "Added" : "Already there")
         : this.btn(t, "setup-programs", "Add to + menu", (_e, cx) => this.step(cx, "setup-programs", "programs", [], (r) => (r.keptYours?.length ? `Added; kept your ${r.keptYours.join(", ")}.` : "Added.")), { enabled: i.installed })),
       this.note(t, "setup-programs"),
+    ]));
+
+    // 6. OpenCode + OpenRouter (optional): a fourth agent on cheap or free models. The key is the user's own: the kit
+    //    only links to the key page and shows the command; it never sees or stores the key.
+    const oc = tools.find((x) => x.key === "opencode");
+    const keySet = Boolean(i.openrouter?.keySet);
+    const cmd = "[Environment]::SetEnvironmentVariable('OPENROUTER_API_KEY', 'your-key', 'User')";
+    rows.push(this.card(t, 6, "OpenCode + OpenRouter (optional)", [
+      div().text_size(11.5).text_color(t.muted).whitespace_normal().child(
+        "A fourth agent on OpenRouter models: the relay picks a cheap model per role, uses it as a backup when your plans run out, and measures its cost. Free models stay off until you allow them per project in relay-defaults.json (opencode.freeModelProjects): their providers may keep what they're sent."),
+      h_flex().gap(8).items_center()
+        .child(oc?.found ? pill("OpenCode found", t.ansi2, { h: 18, size: 10.5 }) : pill("OpenCode not installed", t.muted, { h: 18, size: 10.5 }))
+        .child(keySet ? pill("key set", t.ansi2, { h: 18, size: 10.5 }) : pill("no key", t.muted, { h: 18, size: 10.5 })),
+      keySet ? div().flex_none() : v_flex().gap(4)
+        .child(div().text_size(11).text_color(t.dim).whitespace_normal().child(
+          "Create a key with a monthly credit limit on OpenRouter, then run this in PowerShell with your key, and restart Herdr:"))
+        .child(div().px(8).py(5).rounded(6).bg(t.raised).text_size(10.5).text_color(t.foreground).whitespace_normal().child(cmd)),
+      h_flex().gap(8).items_center()
+        .child(oc?.found ? div().flex_none() : this.btn(t, "setup-opencode", "OpenCode page ↗", () => openUrl("https://opencode.ai/")))
+        .child(keySet ? div().flex_none() : this.btn(t, "setup-orkey", "OpenRouter keys ↗", () => openUrl("https://openrouter.ai/settings/keys")))
+        .child(this.btn(t, "setup-oc-check", "Check again", (_e, cx) => { this.busy = "setup-oc-check"; cx.notify(); cx.spawn(async (cx) => { await this.detect(cx); this.busy = ""; cx.notify(); }); })),
+    ]));
+
+    // 7. Live usage + weekly model report (Windows tasks).
+    rows.push(this.card(t, 7, "Live usage and model report", [
+      div().text_size(11.5).text_color(t.muted).whitespace_normal().child(
+        "Two Windows tasks: one keeps the panel's plan usage and quota outlook fresh every 10 minutes (hidden, a second each), one writes the weekly model report (pass rates, minutes, cost, prices, suggestions). Remove deletes them."),
+      h_flex().gap(8).items_center().child(i.tasks?.set ? this.done(t, "On")
+        : this.btn(t, "setup-tasks", "Turn on", (_e, cx) => this.step(cx, "setup-tasks", "tasks", [], () => "On."), { enabled: i.installed })),
+      this.note(t, "setup-tasks"),
     ]));
 
     // Done / remove.

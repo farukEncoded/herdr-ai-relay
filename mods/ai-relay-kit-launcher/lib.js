@@ -22,16 +22,25 @@ export const protocolDir = () => join(home(), ".agents", "protocol");
 export const relayPs1 = () => join(protocolDir(), "ai-relay.ps1");
 export const planUsagePath = () => join(protocolDir(), "usage", "plan.json");
 export const relayDefaultsPath = () => join(protocolDir(), "relay-defaults.json");
+// The quota planner's view (reserve, safe-until, outages, OpenRouter budget), relay notifications, the model report.
+export const outlookPath = () => join(protocolDir(), "usage", "outlook.json");
+export const notifyPath = () => join(protocolDir(), "usage", "notify.jsonl");
+export const modelReportPath = () => join(protocolDir(), "usage", "model-report.html");
+export const modelReportJsonPath = () => join(protocolDir(), "usage", "model-report.json");
+export const modelReportPs1 = () => join(protocolDir(), "tools", "model-report.ps1");
+export const modelStatsPath = () => join(protocolDir(), "usage", "model-stats.jsonl");
 // The setup script ships inside the panel mod's folder (payload/), so it runs before anything is installed.
 export const setupPs1 = () => join(appHome(), "mods", MOD.panel, "payload", "setup.ps1");
 
-// The three protocol agents. `run` is a fallback; programs.json's `run` wins (loadRuns).
+// The protocol agents. `run` is a fallback; programs.json's `run` wins (loadRuns).
 export const AGENTS = {
   claude: { key: "claude", name: "Claude", icon: "icons/claude.svg", run: ["claude"], n: 1 },
   codex: { key: "codex", name: "Codex", icon: "icons/codex.svg", run: ["codex", "--no-daemon"], n: 2 },
   antigravity: { key: "antigravity", name: "Antigravity", icon: "icons/antigravity.svg", run: ["agy"], n: 3 },
+  // OpenCode on OpenRouter models (optional); the relay picks its model per stage.
+  opencode: { key: "opencode", name: "OpenCode", icon: "icons/opencode.svg", run: ["opencode"], n: 4, mono: true },
 };
-export const AGENT_KEYS = ["claude", "codex", "antigravity"];
+export const AGENT_KEYS = ["claude", "codex", "antigravity", "opencode"];
 export const RELAY_ICON = `${ICONS}/relay.svg`;
 // relay.svg's arrows are near-white: on a light theme use the copy with dark arrows.
 export const relayIcon = () => (settings()?.dark === false ? `${ICONS}/relay-light.svg` : RELAY_ICON);
@@ -55,7 +64,10 @@ export async function loadRuns(appHome) {
 // ---------- look ----------
 
 // Never null: .child(null) makes the whole mod fail to render, so an unknown agent gets an empty box.
-export const agentIcon = (key, size = 14) => (AGENTS[key] ? image(AGENTS[key].icon).size(size).flex_none() : div().size(size).flex_none());
+// A one-color icon (fill="currentColor", like OpenCode's) is drawn as svg in the theme's text color, else it is black.
+export const agentIcon = (key, size = 14) => (!AGENTS[key] ? div().size(size).flex_none()
+  : AGENTS[key].mono ? svg(AGENTS[key].icon).size(size).flex_none().text_color(theme().foreground)
+  : image(AGENTS[key].icon).size(size).flex_none());
 export const icon = (name, size = 14) => svg(`${ICONS}/${name}.svg`).size(size).flex_none();
 
 // Which tool a protocol signature names: "codex-app/gpt-6" -> codex.
@@ -64,6 +76,7 @@ export function toolOf(sig) {
   if (s.startsWith("claude")) return "claude";
   if (s.startsWith("codex") || s.startsWith("chatgpt")) return "codex";
   if (s.startsWith("antigravity") || s.startsWith("agy") || s.startsWith("gemini")) return "antigravity";
+  if (s.startsWith("opencode")) return "opencode";
   return null;
 }
 // An agent's key from a word ("Codex", "agy", "claude-code").
@@ -72,6 +85,7 @@ export function agentKeyOf(word) {
   if (s.includes("claude")) return "claude";
   if (s.includes("codex")) return "codex";
   if (s.includes("antigravity") || s === "agy" || s.includes("gemini")) return "antigravity";
+  if (s.includes("opencode")) return "opencode";
   return null;
 }
 
@@ -260,21 +274,34 @@ export function relayLine(r) {
 // Everything the panel shows about one project, read fresh.
 export async function readProject(root, machine) {
   const rd = async (...p) => { try { return await readTextFile(join(root, ".ai", ...p), { on: machine }); } catch { return null; } };
-  const [state, log, relay, plan] = await Promise.all([rd("STATE.md"), rd("LOG.md"), rd("relay", "status.json"),
-    (async () => { try { return await readTextFile(planUsagePath()); } catch { return null; } })()]);
+  const glob = async (p) => { try { return await readTextFile(p); } catch { return null; } };
+  const [state, log, relay, plan, outlook, report] = await Promise.all([rd("STATE.md"), rd("LOG.md"), rd("relay", "status.json"),
+    glob(planUsagePath()), glob(outlookPath()), glob(modelReportJsonPath())]);
   if (state == null) return { root, setup: false };
   const st = parseState(state);
   return {
     root, setup: true, updated: st.updated, active: activeAgent(st.active),
     next: items(st.sections["next"]), status: items(st.sections["status"]),
     blockers: items(st.sections["blockers"]),
-    log: parseLog(log, 4), relay: parseRelay(relay), usage: parseJson(plan),
+    log: parseLog(log, 4), relay: parseRelay(relay), usage: parseJson(plan), outlook: parseJson(outlook),
+    report: (() => { const r = parseJson(report); return r ? { at: r.at, stages: r.stages, cost: r.cost, days: r.days,
+      suggestions: Array.isArray(r.suggestions) ? r.suggestions.filter((s) => !/^No relay stages recorded/.test(s)) : [],
+      safe: Array.isArray(r.suggestions) ? r.suggestions.filter((s) => /^Remove .* from the OpenCode|: move it down\.$/.test(s)).length : 0 } : null; })(),
   };
 }
 
 // Plan usage (Claude, Codex) is saved by ai-relay.ps1 in planUsagePath(); Antigravity keeps none.
 // The relay's defaults (roles, effort, models, rounds) are in relayDefaultsPath(), shared by the
 // relay, the launcher and the agents.
+// Model report actions: open it in the browser; make it fresh (optionally applying the safe suggestions).
+export async function openModelReport() {
+  await exec("rundll32", ["url.dll,FileProtocolHandler", modelReportPath().replace(/\//g, "\\")]).catch(() => null);
+}
+export async function runModelReport(apply) {
+  const args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", modelReportPs1(), "-Quiet"];
+  if (apply) args.push("-Apply");
+  await exec("powershell", args).catch(() => null);
+}
 export function parseJson(text) { try { return text ? JSON.parse(text.replace(/^\uFEFF/, "")) : null; } catch { return null; } }
 
 // ---------- actions ----------
@@ -287,6 +314,8 @@ export function startAgent(key, { space, folder, name, message }) {
   const args = { name: name ?? `${a.name} · continue`, space, folder: folder ?? undefined };
   // Antigravity rejects Herdr's task argument: its first message goes in argv after -i.
   if (key === "antigravity") run("tab.new", { ...args, argv: [...a.run, "-i", message] });
+  // OpenCode takes its first message as --prompt.
+  else if (key === "opencode") run("tab.new", { ...args, argv: [...a.run, "--prompt", message] });
   else run("tab.new", { ...args, argv: a.run, task: message });
 }
 export const continueWith = (key, space, folder) => startAgent(key, { space, folder, message: "continue" });

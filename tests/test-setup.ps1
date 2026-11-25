@@ -13,7 +13,7 @@ Set-Content -Path (Join-Path $fake '.codex\AGENTS.md') -Value "# my codex rules`
 Set-Content -Path (Join-Path $herdr 'programs.json') -Value '{ "programs": { "mytool": { "name": "My Tool" } } }' -Encoding ASCII
 Set-Content -Path (Join-Path $fake 'fake-path.txt') -Value 'C:\Windows' -Encoding ASCII
 
-$saved = @{ USERPROFILE = $env:USERPROFILE; HERDR_APP_HOME = $env:HERDR_APP_HOME; AI_RELAY_KIT_FAKE_PATH = $env:AI_RELAY_KIT_FAKE_PATH
+$saved = @{ AI_RELAY_KIT_FAKE_TASKS = $env:AI_RELAY_KIT_FAKE_TASKS; USERPROFILE = $env:USERPROFILE; HERDR_APP_HOME = $env:HERDR_APP_HOME; AI_RELAY_KIT_FAKE_PATH = $env:AI_RELAY_KIT_FAKE_PATH
             CLAUDE_CONFIG_DIR = $env:CLAUDE_CONFIG_DIR; CODEX_HOME = $env:CODEX_HOME }
 $fail = 0
 function Check([string]$what, [bool]$ok) { if ($ok) { Write-Host "  PASS $what" -ForegroundColor Green } else { Write-Host "  FAIL $what" -ForegroundColor Red; $script:fail++ } }
@@ -28,6 +28,7 @@ function Tree { Get-ChildItem -LiteralPath $fake -Recurse -File -Force | Where-O
 
 try {
   $env:USERPROFILE = $fake; $env:HERDR_APP_HOME = $herdr; $env:AI_RELAY_KIT_FAKE_PATH = Join-Path $fake 'fake-path.txt'
+$env:AI_RELAY_KIT_FAKE_TASKS = Join-Path $fake 'fake-tasks'
   $env:CLAUDE_CONFIG_DIR = ''; $env:CODEX_HOME = ''
   Write-Host "Fake home: $fake`n"
 
@@ -64,7 +65,12 @@ try {
   $pj = Get-Content (Join-Path $herdr 'programs.json') -Raw | ConvertFrom-Json
   Check 'programs.json keeps mytool' ([bool]$pj.programs.mytool)
   Check 'programs.json has relay' ([bool]$pj.programs.relay)
-  $d = Run @('-Action', 'detect'); Check 'detect: installed' $d.installed
+  $r = Run @('-Action', 'tasks'); Check 'tasks ok' $r.ok
+Check 'both tasks stand-ins made' (@(Get-ChildItem (Join-Path $fake 'fake-tasks') -File).Count -eq 2)
+Check 'model report + usage refresh copied' ((Test-Path (Join-Path $fake '.agents\protocol\tools\model-report.ps1')) -and (Test-Path (Join-Path $fake '.agents\protocol\tools\usage-refresh.ps1')))
+$d = Run @('-Action', 'detect'); Check 'detect: installed' $d.installed
+Check 'detect: tasks set' ([bool]$d.tasks.set)
+Check 'detect: key state reported, never the key' (($null -ne $d.openrouter.keySet) -and (($d | ConvertTo-Json -Depth 6) -notmatch 'sk-or-'))
   Write-Host "`nFiles in the fake home after setup:"; Tree
   Write-Host "`nprograms.json:"; Get-Content (Join-Path $herdr 'programs.json')
 
@@ -77,7 +83,8 @@ try {
   $gm = Get-Content (Join-Path $fake '.gemini\GEMINI.md') -Raw
   Check 'gemini edit kept, block gone' (($gm -match 'my own line') -and ($gm -notmatch 'AI-PROTOCOL'))
   Check 'programs.json restored' ((Get-Content (Join-Path $herdr 'programs.json') -Raw).Trim() -eq '{ "programs": { "mytool": { "name": "My Tool" } } }')
-  Check 'PATH restored' ((Get-Content $env:AI_RELAY_KIT_FAKE_PATH -Raw).Trim() -eq 'C:\Windows')
+  Check 'tasks removed' (@(Get-ChildItem (Join-Path $fake 'fake-tasks') -File -ErrorAction SilentlyContinue).Count -eq 0)
+Check 'PATH restored' ((Get-Content $env:AI_RELAY_KIT_FAKE_PATH -Raw).Trim() -eq 'C:\Windows')
   Check 'protocol folder gone' (-not (Test-Path (Join-Path $fake '.agents\protocol')))
   Write-Host "`nFiles in the fake home after remove:"; Tree
 
@@ -93,6 +100,23 @@ try {
   $r = Run @('-Action', 'remove'); Check 'remove ok' $r.ok
   Check 'older relay restored' ((Get-Content (Join-Path $pd 'ai-relay.ps1') -Raw).Trim() -eq '# my older relay')
   Check 'user defaults still there' (Test-Path (Join-Path $pd 'relay-defaults.json'))
+
+  # Found in a live test (0.2.0): things the user already has, identical or not, must survive Remove untouched.
+  Write-Host "`nThe user's own copies (identical file, programs, tasks):" -ForegroundColor Cyan
+  New-Item -ItemType Directory -Path (Join-Path $pd 'tools') -Force | Out-Null
+  $same = Join-Path $pd 'tools\usage-refresh.ps1'
+  Copy-Item (Join-Path $kitMods 'ai-relay-kit\payload\tools\usage-refresh.ps1') $same -Force
+  $progText = '{ "programs": { "claude": { "run": ["claude"] }, "codex": { "run": ["codex"] }, "antigravity": { "run": ["agy"] }, "relay": { "run": ["relay"] } } }'
+  Set-Content -Path (Join-Path $herdr 'programs.json') -Value $progText -Encoding ASCII -NoNewline
+  $progHash = (Get-FileHash (Join-Path $herdr 'programs.json')).Hash
+  foreach ($n in 'AI relay usage refresh', 'AI relay model report') { Set-Content -Path (Join-Path $fake "fake-tasks\$n") -Value 'mine' -Encoding ASCII }
+  $r = Run @('-Action', 'install'); Check 'install ok (2nd)' $r.ok
+  $r = Run @('-Action', 'programs'); Check 'programs: kept all yours' ((@($r.keptYours).Count -ge 4) -and (@($r.added).Count -eq 0))
+  $r = Run @('-Action', 'tasks'); Check 'tasks: kept yours' ([bool]$r.keptYours)
+  $r = Run @('-Action', 'remove'); Check 'remove ok (2nd)' $r.ok
+  Check 'identical file that was already there survives' (Test-Path $same)
+  Check 'programs.json byte-identical' ((Get-FileHash (Join-Path $herdr 'programs.json')).Hash -eq $progHash)
+  Check 'your tasks survive' (@(Get-ChildItem (Join-Path $fake 'fake-tasks') -File).Count -eq 2)
   Write-Host "`nFiles in the fake home at the end:"; Tree
 } finally {
   foreach ($k in $saved.Keys) { Set-Item -Path "env:$k" -Value $(if ($saved[$k]) { $saved[$k] } else { '' }) }

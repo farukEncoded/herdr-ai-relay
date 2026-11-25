@@ -7,12 +7,13 @@
 
 import { View, div, svg, image } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
-import { agents, focused, theme, run, shared, watchFolder, appHome, home, checking, nextCommand, panes, openOverlay } from "herdr";
+import { agents, focused, theme, run, shared, watchFolder, appHome, home, checking, nextCommand, panes, openOverlay, notify, readTextFile } from "herdr";
 import {
   AGENTS, AGENT_KEYS, RELAY_ICON, relayIcon, agentIcon, icon, iconButton, pill, tip, roleColor, ago, minutes, relayLine,
   activeSpace, spaceDir, findRoot, readProject, join, baseName, samePath, loadRuns,
   continueWith, setupProtocol, getReview, relayControl, openHandoff, openLauncher, openCommands, AGENT_NAME,
   SHARED_FOCUS, focusPanel, onWindows, MOD,
+  notifyPath, parseJson, openModelReport, runModelReport,
 } from "./lib.js";
 import { Setup } from "./setup.js";
 
@@ -57,6 +58,24 @@ export default class AiProject extends View {
     });
     // Fallback refresh (remote spaces, reclaimed watches) and the relay's elapsed time / heartbeat.
     cx.timer.every(10000, (cx) => { if (this.data) this.reload(cx); });
+    // Relay notifications (D-030): every relay appends to usage/notify.jsonl; show each new line once as a toast,
+    // whichever project this panel shows. Lines already there when Herdr starts are not shown again.
+    this.notifySeen = null;
+    const pollNotify = () => cx.spawn(async () => {
+      let text = null;
+      try { text = await readTextFile(notifyPath()); } catch { return; }
+      const items = String(text ?? "").split(/\r?\n/).map(parseJson).filter((x) => x && x.id);
+      if (this.notifySeen === null) { this.notifySeen = new Set(items.map((x) => x.id)); return; }
+      for (const n of items) {
+        if (this.notifySeen.has(n.id)) continue;
+        this.notifySeen.add(n.id);
+        if (Date.now() - Date.parse(n.at) > 15 * 60000) continue;   // stale: don't toast old news
+        notify({ title: String(n.title ?? "AI relay"), body: String(n.body ?? ""), level: n.level ?? "info", timeout: n.level === "error" ? 0 : 12000,
+                 action: n.terminal ? { name: "pane.focus", args: { terminal: n.terminal } } : undefined });
+      }
+    });
+    pollNotify();
+    cx.timer.every(10000, () => pollNotify());
   }
 
   async close() { this.watch?.cancel(); }
@@ -212,8 +231,10 @@ export default class AiProject extends View {
     const tipText = [`Stage ${s.n} · ${s.role} · ${AGENT_NAME(s.agent)}${s.here ? " (your own session)" : ""}`, s.label,
       `model ${s.model || "default"} · effort ${s.effort || "default"}`, `${mins ?? 0} min${s.by ? ` · done by ${s.by}` : ""}`,
       use, s.verdict ? `verdict ${s.verdict}` : "", s.terminal ? `terminal ${s.terminal}` : "",
-      Array.isArray(s.cleaned) && s.cleaned.length ? `cleaned up after it: ${s.cleaned.join("; ")}` : ""].filter(Boolean).join("\n");
+      Array.isArray(s.cleaned) && s.cleaned.length ? `cleaned up after it: ${s.cleaned.join("; ")}` : "",
+      Array.isArray(s.switches) && s.switches.length ? `quota fallback:\n${s.switches.join("\n")}` : ""].filter(Boolean).join("\n");
     const cleaned = Array.isArray(s.cleaned) && s.cleaned.length > 0;
+    const switched = Array.isArray(s.switches) && s.switches.length > 0;
     return h_flex().id(`stage-${s.n}`).h(22).gap(6).items_center().min_w(0).rounded(5).tooltip(tipText)
       .when(Boolean(s.terminal), (el) => el.cursor_pointer().hover((st) => st.bg(t.hover))
         .on_click(() => run("pane.focus", { terminal: s.terminal })))
@@ -224,6 +245,7 @@ export default class AiProject extends View {
       .child(div().flex_1().min_w(0).truncate().text_size(11).text_color(current ? t.foreground : t.muted).child(model))
       .when(s.verdict === "CHANGES_REQUESTED", (el) => el.child(div().flex_none().size(6).rounded(3).bg(t.ansi3)))
       .when(cleaned, (el) => el.child(div().flex_none().text_size(10).text_color(t.ansi3).child("⌫")))
+      .when(switched, (el) => el.child(div().flex_none().text_size(10).text_color(t.ansi5).child("↻")))
       .child(div().flex_none().text_size(10.5).text_color(t.dim).child([use.split(" · ")[0], `${mins ?? 0}m`].filter(Boolean).join(" · ")));
   }
 
@@ -245,7 +267,7 @@ export default class AiProject extends View {
   }
 
   // Plan usage bars: Claude / Codex 5-hour and weekly, as last saved; Antigravity keeps no numbers.
-  usageCard(t, u) {
+  usageCard(t, u, o) {
     // A window the vendor didn't report (e.g. Claude omits five_hour at times): a dash, never null (null crashes child()).
     const bar = (label, w) => {
       if (!w || typeof w.used !== "number") return h_flex().gap(6).items_center().tooltip(`${label}: not reported this time`)
@@ -262,15 +284,84 @@ export default class AiProject extends View {
         .child(div().w(30).flex_none().text_size(10.5).text_color(pct >= 90 ? t.blocked : t.muted).child(`${pct}%`))
         .child(div().w(40).flex_none().text_size(10).text_color(t.dim).child(isNaN(reset) || reset <= 0 ? "" : `↻ ${ago(reset)}`));
     };
+    // The quota planner's line under an agent (D-029): reserve and safe-until (Claude/Codex), outages (Antigravity).
+    const hhmm = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`; };
+    const note = (text, color, tip) => div().text_size(10.5).text_color(color ?? t.dim).truncate().tooltip(tip ?? text).child(text);
+    const plannerLine = (key) => {
+      const x = o?.[key];
+      if (key === "antigravity") {
+        const outs = Array.isArray(o?.antigravity) ? o.antigravity : [];
+        if (!outs.length) return note(o ? "No outages seen" : "Doesn't report usage; outages show here");
+        const names = outs.map((q) => `${q.model} until ${hhmm(q.until)}`).join(", ");
+        return note(`Out: ${names}`, t.ansi3, `Out of quota (the relay switches models or agents): ${names}`);
+      }
+      if (!x) return div();
+      const cap = key === "claude" ? ` · reserve ${100 - Math.round(x.cap)}% kept for you` : "";
+      if (x.out) return note(`Out until ${hhmm(x.out)} · other agents take its stages`, t.blocked);
+      if (x.safeUntil === "over") return note(`Over ${Math.round(x.cap)}%: new stages go to other agents${cap}`, t.ansi3,
+        key === "claude" ? "Claude is past the relay's share of its 5-hour limit; the rest is kept for your own Claude chats (the reviewer may still use it up to 90%)." : undefined);
+      if (x.safeUntil && x.safeUntil !== "ok") return note(`Safe until ~${hhmm(x.safeUntil)} at this pace${cap}`, t.muted);
+      return note(`Safe at this pace${cap}`, t.dim);
+    };
     const vendor = (key, data) => v_flex().gap(3)
       .child(h_flex().gap(6).items_center()
         .child(agentIcon(key, 12))
         .child(div().flex_1().text_size(11.5).text_color(t.foreground).child(AGENT_NAME(key) + (data?.plan ? ` · ${data.plan}` : "")))
         .child(div().text_size(10).text_color(t.dim).child(data?.at ? `as of ${ago(Date.now() - Date.parse(data.at))}` : "")))
       .child(data ? v_flex().gap(2).child(bar("5 h", data.fiveHour)).child(bar("week", data.week))
-        : div().text_size(10.5).text_color(t.dim).child(key === "antigravity" ? "Antigravity doesn't report usage" : "No data yet (updates when a relay runs it)"));
+        : key === "antigravity" ? div() : div().text_size(10.5).text_color(t.dim).child("No data yet (updates when a relay runs it)"))
+      .child(plannerLine(key));
+    // OpenCode on OpenRouter: this period's paid budget against the paced share (weekly by default).
+    const openrouter = () => {
+      const b = o?.opencode?.budget;
+      const head = h_flex().gap(6).items_center().child(agentIcon("opencode", 12))
+        .child(div().flex_1().text_size(11.5).text_color(t.foreground).child("OpenCode · OpenRouter"));
+      if (!b) return v_flex().gap(3).child(head).child(note("Budget shows once a relay has run"));
+      const pct = b.allowedNow > 0 ? Math.max(0, Math.min(100, Math.round(100 * b.used / b.allowedNow))) : 100;
+      const color = !b.paidOk ? t.blocked : pct >= 75 ? t.ansi3 : t.ansi2;
+      const outs = Array.isArray(o?.opencode?.out) && o.opencode.out.length ? ` · out: ${o.opencode.out.join(", ")}` : "";
+      return v_flex().gap(3).child(head)
+        .child(h_flex().gap(6).items_center().min_w(0)
+          .tooltip(`Paid models may spend $${b.allowedNow} by now (${b.pace} share of the $${b.limit} ${b.reset ?? ""} limit); free models always go on.`)
+          .child(div().w(34).flex_none().text_size(10.5).text_color(t.dim).child("paid"))
+          .child(h_flex().flex_1().h(5).rounded(3).bg(t.border)
+            .child(div().h(5).rounded(3).bg(color).flex_basis(0).flex_grow(Math.max(pct, 1)))
+            .child(div().h(5).flex_basis(0).flex_grow(Math.max(100 - pct, 0.01))))
+          .child(div().w(70).flex_none().text_size(10.5).text_color(t.muted).child(`$${Number(b.used).toFixed(2)}/${b.allowedNow}`)))
+        .child(note(b.paidOk ? `Paid OK this ${b.pace === "daily" ? "day" : "week"}; free models first${outs}` : `Paid paused until next ${b.pace === "daily" ? "day" : "week"}; free models go on${outs}`,
+          b.paidOk ? t.dim : t.ansi3));
+    };
     return v_flex().mx(8).mt(8).p(10).gap(8).rounded(9).bg(t.background).border(1).border_color(t.border).flex_none()
-      .children(["claude", "codex", "antigravity"].map((k) => vendor(k, u?.[k])));
+      .children(["claude", "codex", "antigravity"].map((k) => vendor(k, u?.[k])))
+      .child(openrouter());
+  }
+
+  // Model report summary (D-030): what the weekly report found, Open, and Apply for the safe suggestions.
+  modelsCard(t, rep) {
+    const btn = (id, ic, label, action) => h_flex().id(id).h(24).px(8).gap(5).items_center().rounded(6)
+      .border(1).border_color(t.border).text_size(11.5).text_color(t.muted).cursor_pointer()
+      .hover((s) => s.bg(t.hover).text_color(t.foreground)).on_click(action).child(icon(ic, 12)).child(label);
+    const busy = this.reportBusy;
+    const refresh = (apply) => {
+      if (this.reportBusy) return;
+      this.reportBusy = apply ? "Applying…" : "Updating…";
+      this.sig = null;   // the next 10-second reload redraws with the fresh report
+      runModelReport(apply).finally(() => { this.reportBusy = null; this.sig = null; });
+    };
+    const head = rep
+      ? `${rep.stages} stage${rep.stages === 1 ? "" : "s"} in ${rep.days} days · $${Number(rep.cost ?? 0).toFixed(2)} · ${hhmm(rep.at)} ${new Date(rep.at).toDateString().slice(4, 10)}`
+      : "No report yet (made weekly, or click Update)";
+    const sugg = rep?.suggestions ?? [];
+    return v_flex().mx(8).mt(8).p(10).gap(6).rounded(9).bg(t.background).border(1).border_color(t.border).flex_none()
+      .child(div().text_size(11).text_color(t.muted).truncate().tooltip(head).child(head))
+      .child(sugg.length
+        ? v_flex().gap(2).children(sugg.slice(0, 3).map((s, i) => div().id(`sugg-${i}`).text_size(10.5).text_color(t.foreground).truncate().tooltip(s).child(`• ${s}`)))
+        : div().text_size(10.5).text_color(t.dim).child(rep ? "No suggestions" : ""))
+      .child(sugg.length > 3 ? div().text_size(10.5).text_color(t.dim).child(`+${sugg.length - 3} more in the report`) : div())
+      .child(h_flex().gap(6).items_center()
+        .child(btn("rep-open", "activity", "Open report", () => openModelReport()))
+        .child(btn("rep-update", "history", busy ?? "Update", () => refresh(false)))
+        .when(Boolean(rep?.safe), (el) => el.child(btn("rep-apply", "check", `Apply ${rep.safe} safe`, () => refresh(true)))));
   }
 
   relayCard(t, r) {
@@ -397,7 +488,9 @@ export default class AiProject extends View {
       .child(div().flex_1().text_size(11.5).text_color(t.foreground).child("Relay files can be updated: open setup")));
     if (d.relay) rows.push(this.relayCard(t, d.relay));
     rows.push(this.section(t, "sec-usage", "Plan usage"));
-    rows.push(this.usageCard(t, d.usage));
+    rows.push(this.usageCard(t, d.usage, d.outlook));
+    rows.push(this.section(t, "sec-models", "Models"));
+    rows.push(this.modelsCard(t, d.report));
 
     // Next: the first five items of STATE's ## Next.
     rows.push(this.section(t, "sec-next", "Next"));

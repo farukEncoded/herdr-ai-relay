@@ -7,21 +7,23 @@
 #   protocol -Agent X   add the protocol block to X's global rules file (claude | codex | antigravity), with a backup
 #   path                add ~/.agents/protocol/bin (the 'relay' command) to the user PATH
 #   programs            add Herdr programs.json entries (+ menu) for the agents found, plus 'AI Relay'
+#   tasks               two Windows tasks: live usage for the panel (every 10 min) and the weekly model report
 #   remove              undo everything this kit did (restores backups where the file is unchanged since)
 #
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File setup.ps1 -Action detect [-HerdrHome <dir>]
-# Test hooks: USERPROFILE decides the home folder; AI_RELAY_KIT_FAKE_PATH (a file) stands in for the user PATH.
+# Test hooks: USERPROFILE decides the home folder; AI_RELAY_KIT_FAKE_PATH (a file) stands in for the user PATH;
+# AI_RELAY_KIT_FAKE_TASKS (a folder) stands in for Windows Task Scheduler.
 # Keep this file ASCII and Windows PowerShell 5.1 compatible.
 
 param(
-  [ValidateSet('detect', 'install', 'protocol', 'path', 'programs', 'remove')]
+  [ValidateSet('detect', 'install', 'protocol', 'path', 'programs', 'tasks', 'remove')]
   [string]$Action = 'detect',
   [string]$Agent = '',
   [string]$HerdrHome = ''
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-$KitVersion = '0.1.2'
+$KitVersion = '0.2.0'
 $Source = $PSScriptRoot
 
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
@@ -33,7 +35,9 @@ $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 # The engine files copied to ~/.agents/protocol (relative paths).
 $PayloadFiles = @('ai-relay.ps1', 'setup.ps1', 'AI-PROTOCOL.md', 'RELAY-AGENT.md', 'relay-defaults.json',
-                  'bin\relay.cmd', 'bin\claude-statusline.ps1')
+                  'bin\relay.cmd', 'bin\claude-statusline.ps1', 'tools\model-report.ps1', 'tools\usage-refresh.ps1')
+# The Windows tasks the 'tasks' step sets up (tools/*.ps1 -Schedule) and Remove deletes.
+$TaskNames = @('AI relay usage refresh', 'AI relay model report')
 # Files the user is expected to edit: never overwritten once they exist.
 $UserFiles = @('relay-defaults.json')
 
@@ -103,11 +107,15 @@ function Detect-Tools {
     @{ key = 'herdr-app'; name = 'Herdr app CLI'; cmd = 'herdr-app'; url = 'https://herdr.dev/download/'
        dirs = @("$L\Programs\herdr-app") },
     @{ key = 'git'; name = 'Git'; cmd = 'git'; url = 'https://git-scm.com/install/'
-       dirs = @("$env:ProgramFiles\Git\cmd", "$L\Programs\Git\cmd") }
+       dirs = @("$env:ProgramFiles\Git\cmd", "$L\Programs\Git\cmd") },
+    @{ key = 'opencode'; name = 'OpenCode (optional)'; cmd = 'opencode'; url = 'https://opencode.ai/'
+       dirs = @("$A\npm", "$UserHome\.opencode\bin", "$L\Programs\opencode") }
   )
   $out = @()
   foreach ($t in $list) {
     $p = Find-Tool $t.cmd $t.dirs
+    # npm and fnm install some CLIs as .ps1 shims only.
+    if (-not $p) { $c = Get-Command $t.cmd -ErrorAction SilentlyContinue | Select-Object -First 1; if ($c) { $p = $c.Source } }
     $out += [pscustomobject]@{ key = $t.key; name = $t.name; found = [bool]$p; path = $(if ($p) { $p } else { '' }); url = $t.url }
   }
   return ,$out
@@ -137,6 +145,9 @@ function Do-Detect {
     tools = (Detect-Tools); protocol = $protocol
     path = [ordered]@{ dir = $BinDir; onPath = $onPath; managed = [bool]($m.path -and $m.path.added) }
     programs = [ordered]@{ file = $progFile; herdrFound = (Test-Path -LiteralPath $HerdrHome); entries = $entries; managed = [bool]$m.programs }
+    # Only whether a key is set: its value is never read into the result.
+    openrouter = [ordered]@{ keySet = [bool]([Environment]::GetEnvironmentVariable('OPENROUTER_API_KEY', 'User') -or $env:OPENROUTER_API_KEY) }
+    tasks = [ordered]@{ set = (Test-Tasks); managed = [bool]$m.tasks }
   })
 }
 
@@ -154,7 +165,8 @@ function Do-Install {
     $entry = [ordered]@{ rel = $rel; sha = ''; backup = $(if ($prev) { $prev.backup } else { '' }); created = $(if ($prev) { [bool]$prev.created } else { $true }) }
     if (Test-Path -LiteralPath $dst) {
       $cur = Read-Text $dst
-      if ($cur -eq $text) { $entry.sha = Hash-Of $dst; $files += [pscustomobject]$entry; continue }
+      # Already there with the same text: not ours to delete on Remove (found in a live test, 0.2.0).
+      if ($cur -eq $text) { if (-not $prev) { $entry.created = $false }; $entry.sha = Hash-Of $dst; $files += [pscustomobject]$entry; continue }
       $ours = $prev -and ((Hash-Of $dst) -eq $prev.sha)
       if (-not $ours -and ($UserFiles -contains $rel)) {
         $notes += "kept your $rel"; $entry.sha = 'user'; $files += [pscustomobject]$entry; continue
@@ -260,9 +272,40 @@ function Do-Programs {
     if ($text -and -not $prev) { $backup = "$file.bak-ai-relay-kit"; if (-not (Test-Path -LiteralPath $backup)) { [IO.File]::WriteAllText($backup, $text, $utf8) } }
     Write-Text $file ($json | ConvertTo-Json -Depth 10)
   }
-  Set-Prop $m 'programs' ([pscustomobject]@{ file = $file; backup = $backup; created = $created; keys = $added; sha = (Hash-Of $file) })
-  Save-Manifest $m
+  # Nothing of ours in the file (every entry was the user's already): record nothing, so Remove never rewrites it.
+  if (@($added).Count) {
+    Set-Prop $m 'programs' ([pscustomobject]@{ file = $file; backup = $backup; created = $created; keys = $added; sha = (Hash-Of $file) })
+    Save-Manifest $m
+  }
   Out-Result ([ordered]@{ ok = $true; action = 'programs'; file = $file; added = $added; keptYours = $skipped })
+}
+
+function Test-Tasks {
+  foreach ($n in $TaskNames) {
+    if ($env:AI_RELAY_KIT_FAKE_TASKS) { if (-not (Test-Path -LiteralPath (Join-Path $env:AI_RELAY_KIT_FAKE_TASKS $n))) { return $false } }
+    elseif (-not (Get-ScheduledTask -TaskName $n -ErrorAction SilentlyContinue)) { return $false }
+  }
+  return $true
+}
+function Do-Tasks {
+  Require-Installed
+  $m = Read-Manifest
+  # Tasks with these names already there (set up by hand, or by an earlier install): keep them as yours, so Remove
+  # leaves them alone.
+  if ((Test-Tasks) -and -not $m.tasks) { Out-Result ([ordered]@{ ok = $true; action = 'tasks'; tasks = $TaskNames; keptYours = $true }); return }
+  if ($env:AI_RELAY_KIT_FAKE_TASKS) {
+    New-Item -ItemType Directory -Path $env:AI_RELAY_KIT_FAKE_TASKS -Force | Out-Null
+    foreach ($n in $TaskNames) { Write-Text (Join-Path $env:AI_RELAY_KIT_FAKE_TASKS $n) 'task' }
+  } else {
+    foreach ($s in @('tools\usage-refresh.ps1', 'tools\model-report.ps1')) {
+      $f = Join-Path $ProtocolDir $s
+      $o = & (Join-Path $PSHOME 'powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $f -Schedule 2>&1 | Out-String
+      if ($LASTEXITCODE -ne 0) { throw "Could not set up the task from ${s}: $o" }
+    }
+  }
+  Set-Prop $m 'tasks' $true
+  Save-Manifest $m
+  Out-Result ([ordered]@{ ok = $true; action = 'tasks'; tasks = $TaskNames })
 }
 
 # Undo one edited file: unchanged since we wrote it -> restore the backup (or delete what we created);
@@ -281,7 +324,7 @@ function Do-Remove {
   if (-not (Test-Path -LiteralPath $ManifestPath)) { Out-Result ([ordered]@{ ok = $true; action = 'remove'; notes = @('nothing to remove') }); return }
   $m = Read-Manifest
   $notes = @()
-  if ($m.programs) {
+  if ($m.programs -and @($m.programs.keys).Count) {
     $p = $m.programs; $keys = @($p.keys)
     $notes += Undo-File $p.file $p.backup ([bool]$p.created) $p.sha {
       param($f)
@@ -289,6 +332,13 @@ function Do-Remove {
       foreach ($k in $keys) { if ($j.programs -and $j.programs.PSObject.Properties[$k]) { $j.programs.PSObject.Properties.Remove($k) } }
       Write-Text $f ($j | ConvertTo-Json -Depth 10)
     }
+  }
+  if ($m.tasks) {
+    foreach ($n in $TaskNames) {
+      if ($env:AI_RELAY_KIT_FAKE_TASKS) { Remove-Item -LiteralPath (Join-Path $env:AI_RELAY_KIT_FAKE_TASKS $n) -Force -ErrorAction SilentlyContinue }
+      else { & schtasks.exe /Delete /F /TN $n 2>$null | Out-Null }
+    }
+    $notes += 'removed the Windows tasks (usage refresh, model report)'
   }
   if ($m.path -and $m.path.added) {
     $cur = Get-UserPath
@@ -320,7 +370,7 @@ function Do-Remove {
   if ($engine -and $engine.created -and (Test-Path -LiteralPath $usage)) { Remove-Item -LiteralPath $usage -Recurse -Force }
   Get-ChildItem -LiteralPath $ProtocolDir -Directory -Filter 'backup-ai-relay-kit-*' -ErrorAction SilentlyContinue |
     ForEach-Object { $notes += "kept backups: $($_.FullName)" }
-  foreach ($d in @($BinDir, $ProtocolDir, (Split-Path -Parent $ProtocolDir))) {
+  foreach ($d in @($BinDir, (Join-Path $ProtocolDir 'tools'), $ProtocolDir, (Split-Path -Parent $ProtocolDir))) {
     if ((Test-Path -LiteralPath $d) -and -not (Get-ChildItem -LiteralPath $d -Force)) { Remove-Item -LiteralPath $d -Force }
   }
   Out-Result ([ordered]@{ ok = $true; action = 'remove'; notes = $notes })
@@ -333,6 +383,7 @@ try {
     'protocol' { Do-Protocol }
     'path'     { Do-Path }
     'programs' { Do-Programs }
+    'tasks'    { Do-Tasks }
     'remove'   { Do-Remove }
   }
 } catch {

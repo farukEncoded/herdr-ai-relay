@@ -22,13 +22,15 @@ Relay setup for <project>   (reply "ok" for all defaults, or change any line, e.
 2 Run type:  build      full = every role | build = without the once-roles (planner) | review = the judge alone
                         | queue = big goal: planner splits it into tasks, each naming its own agents; user approves;
                           then one mini-relay per task (good when parts suit different agents, e.g. assets vs code)
-3 Roles:     planner=claude  executor=antigravity  tester=codex  reviewer=claude
-             each: claude | codex | antigravity | me (this <your agent> session)
+3 Roles:     planner=claude  executor=antigravity  tester=opencode  reviewer=claude
+             each: claude | codex | antigravity | opencode | me (this <your agent> session; not for OpenCode)
 4 Fix rounds: 3, ask before each: yes
 5 Effort:    recommended (each role's own effort; coding: planner high, executor high, tester medium, reviewer high)
              or: agent default | custom e.g. planner=xhigh,tester=low   (the executor is always high or above)
-6 Models:    agent defaults (Claude Opus 5.5, Codex GPT-6.2-Sol, Antigravity Gemini 3.8 Flash)
-             or custom: claude fable|opus|sonnet|haiku, codex sol|astra|terra|luna, antigravity flash|sonnet|opus|gpt-oss
+6 Models:    agent defaults (Claude Opus 5.5, Codex GPT-6.2-Sol, Antigravity Gemini 4 Hydrogen, OpenCode: the
+             relay's picker, best free or cheap OpenRouter model per role)
+             or custom: claude fable|opus|sonnet|haiku, codex sol|astra|terra|luna,
+             antigravity hydrogen|flash|sonnet|opus|gpt-oss, opencode glm|deepseek|kimi|nemotron|mimo
 7 Stage timeout: 120 min
 8 Overnight: no      yes = unattended: no questions, ALL agent permissions skipped, its own git branch.
                      When it ends (first one wins): until <overnight.until> | until done (no time limit),
@@ -49,6 +51,17 @@ relay before the user answered.
 - A role given to "me" is written `role=here`, plus `-HereTerminal $env:HC_TERMINAL_ID -HereAgent <claude|codex|antigravity>`
   (what you are). Model and effort of "here" roles stay as this session has them.
 - Never put double quotes inside -Goal (use ' instead).
+- Plan quota is handled by the relay itself (relay-defaults.json `fallback`, D-027): a limit that resets within
+  `waitMinutes` is waited out; otherwise Antigravity switches model inside its session (Gemini -> its Claude models),
+  and a Claude or Codex stage is handed to another agent. Near a limit the tester (and the reviewer in fix rounds)
+  starts one effort step lower; the executor never does. Don't promise the user anything beyond that.
+- OpenCode (D-028) runs OpenRouter models: free ones first where relay-defaults.json `opencode.freeModelProjects`
+  allows, paid ones within the key's budget. Its cost is measured exactly; `tools/model-report.ps1` shows how every
+  agent and model does (usage/model-report.html). OpenCode can't be a "me" role.
+- Quota planner (D-029): frontier agents first (codex > claude > antigravity, then opencode); relay stages use Claude
+  only up to 75 % of its 5-hour limit (the reviewer up to 90 %), keeping the rest for the user's own Claude chats; an
+  agent that probably can't finish a stage is skipped up front; no quota wait lasts over 30 min; when everything is
+  out, free OpenRouter models carry on (flagged). Paid OpenRouter spend is paced weekly.
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "{{PROTOCOL_DIR}}\ai-relay.ps1" -Folder "<project root>" `
   -Goal "<goal>" -Stages "executor=here,tester=codex,reviewer=claude" -Loop "executor=here,tester=codex,reviewer=claude" `

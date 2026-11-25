@@ -3,7 +3,9 @@
 Turn Claude Code, Codex and Antigravity into one dev team. Give it a goal: one agent plans, one builds, one tests
 and one reviews, each in its own Herdr tab, handing the work over through a shared `.ai/` memory until the reviewer
 signs off. No copy-pasting between agents, no babysitting approvals. Start it with one click or by typing `relay` in
-any agent, watch every stage in one panel, or let it run overnight on its own git branch.
+any agent, watch every stage in one panel, or let it run overnight on its own git branch. When an agent's plan runs
+out, the relay switches model or hands the stage to another agent (optionally OpenCode on cheap OpenRouter models),
+and it measures every model so you can see which ones are worth it.
 
 ![AI Relay](preview.png)
 
@@ -15,18 +17,23 @@ any agent, watch every stage in one panel, or let it run overnight on its own gi
   Codex / Antigravity, review, relay, handoff); the relay card (relay icon, state pill, "Stage 3 · tester ·
   Codex", fix round, verdict pill, "Needs you" box when the relay asks something, totals line "3 of up to 13
   stages done · 1 h 12 min · 412k tokens", queue rows and stage rows with role pills in ansi4/6/3/5, Pause/Resume
-  and Stop); "Plan usage" with 5 h and week bars for Claude and Codex (green, amber ≥70 %, red ≥90 %); "Next"
+  and Stop); "Plan usage" with 5 h and week bars for Claude and Codex (green, amber ≥70 %, red ≥90 %), under each a
+  line "Safe until ~HH:MM at this pace · reserve 25 % kept for you" (or "Over 75 %: new stages go to other agents"),
+  Antigravity's outages ("Out: opus until 17:06"), and an OpenCode · OpenRouter row with a paid-budget bar for the
+  week; "Models" (report summary, top three suggestions, Open report / Update / Apply n safe); a ↻ mark in ansi5 on
+  stages that fell back (tooltip: what switched and why); "Next"
   (first five of STATE's Next), "Status" (two lines, expandable), "Recent" (last four LOG lines with agent
   icon and role), "Blockers" in the blocked color.
-- **Setup screen** (same panel): five numbered cards on the background color with a 1 px border and 9 px
+- **Setup screen** (same panel): seven numbered cards on the background color with a 1 px border and 9 px
   radius: 1 Agents and tools (found pill in ansi2, or an amber "missing · install page ↗" chip), 2 Relay files,
   3 Shared protocol in each agent's rules (one row per agent with its file and an Add block button),
-  4 The relay command (PATH), 5 Herdr + menu. Done (primary) and Remove… (danger, asks twice) at the bottom.
+  4 The relay command (PATH), 5 Herdr + menu, 6 OpenCode + OpenRouter (optional: found/key pills, the key
+  command to copy, links to opencode.ai and the OpenRouter keys page), 7 Live usage and model report (Turn on). Done (primary) and Remove… (danger, asks twice) at the bottom.
 - **Start AI relay** dialog (600 × 820): Project (folder, set up/new pill, Change…), Goal input, Team (only with
   more than one team), Run type segments (Full, Build, Review, Queue) with a one-line description, Who does what
   (per role, three agent segments), Fix rounds 0–5 and "Ask me before each fix round", Effort (Recommended /
   Agent default / Custom per role; executor only High/XHigh/Max), Model (Agent default / Custom), a summary line,
-  Cancel / Start relay.
+  an estimate line from your past stages (minutes, plan use, OpenRouter cost, per fix round), Cancel / Start relay.
 - **AI commands** popup (520 wide, top): filter input, rows with icon, "AI: …" title and key.
 - **Handoff viewer** pane: tabs Handoff · State · T-xxx · Decisions, the file as markdown.
 - **Drawer** (optional floating block): relay icon, stage number and pulsing dot; slides out the stage line
@@ -64,7 +71,7 @@ any agent, watch every stage in one panel, or let it run overnight on its own gi
 - `herdr`: spaces, panes, agents, focused, keys, layout, theme, settings, window, shared/setShared, readTextFile,
   watchFolder, exec, run (`tab.new`, `space.new`, `pane.split`, `pane.focus`, `mod.open`, `layout.show`,
   `layout.resize`), openOverlay via `mod.open`, closeOverlay, pickFolder, nextCommand, home, appHome, checking.
-- Programs: `powershell` (setup.ps1, ai-relay.ps1), `hc send` (review request), `cmd` (control files),
+- Programs: `powershell` (setup.ps1, ai-relay.ps1, tools/model-report.ps1), `hc send` (review request), `cmd` (control files),
   `rundll32 url.dll,FileProtocolHandler` (open an install page).
 - Setup's install links (official pages, checked 2026-11-24): Claude Code `https://code.claude.com/docs/en/setup`,
   Codex CLI `https://github.com/openai/codex`, Antigravity CLI `https://antigravity.google/download`, Herdr app and

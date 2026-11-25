@@ -8,7 +8,7 @@ import { v_flex, h_flex, InputState, Input } from "gpui-base";
 import { spaces, theme, run, closeOverlay, props, pickFolder, readTextFile, appHome, checking } from "herdr";
 import {
   AGENTS, AGENT_KEYS, ROLES, RELAY_ICON, relayIcon, relayPs1, agentIcon, icon, pill, roleColor, activeSpace, spaceDir, spaceHolds, findRoot,
-  join, baseName, samePath, parseRelay, choiceFor, rememberChoice, isWin, parseJson, relayDefaultsPath, focusPanel, MOD,
+  join, baseName, samePath, parseRelay, choiceFor, rememberChoice, isWin, parseJson, relayDefaultsPath, focusPanel, MOD, modelStatsPath,
 } from "./lib.js";
 
 // Teams: roles in order, each with its default agent and effort; once = first pass only; judge = approves or
@@ -37,11 +37,12 @@ const EXEC_LEVELS = ["high", "xhigh", "max"];
 const MODELS = {
   claude: [["default", "Default"], ["fable", "Fable"], ["opus", "Opus"], ["sonnet", "Sonnet"], ["haiku", "Haiku"]],
   codex: [["default", "Default"], ["sol", "Sol"], ["astra", "Astra"], ["terra", "Terra"], ["luna", "Luna"]],
-  antigravity: [["default", "Default"], ["sonnet", "Sonnet 4.6"], ["opus", "Opus 4.6"], ["gpt-oss", "GPT-OSS"]],
+  antigravity: [["default", "Default"], ["hydrogen", "Hydrogen"], ["flash", "Flash"], ["sonnet", "Sonnet 4.6"], ["opus", "Opus 4.6"], ["gpt-oss", "GPT-OSS"]],
+  opencode: [["default", "Auto"], ["glm", "GLM 5.3"], ["deepseek", "DeepSeek V4.1"], ["kimi", "Kimi K3.1"], ["nemotron", "Nemotron (free)"]],
 };
-const MODEL_DEFAULT = { claude: "Opus 5.5", codex: "GPT-6.2-Sol", antigravity: "Gemini 3.8 Flash" };
+const MODEL_DEFAULT = { claude: "Opus 5.5", codex: "GPT-6.2-Sol", antigravity: "Gemini 4 Hydrogen", opencode: "the relay's picker: best free or cheap OpenRouter model per role" };
 const MODEL_MODES = {
-  default: { label: "Agent default", about: "Claude Opus 5.5, Codex GPT-6.2-Sol, Antigravity Gemini 3.8 Flash." },
+  default: { label: "Agent default", about: "Claude Opus 5.5, Codex GPT-6.2-Sol, Antigravity Gemini 4 Hydrogen; OpenCode: the relay picks the best free or cheap model." },
   custom: { label: "Custom", about: "Choose per role. Antigravity's Sonnet/Opus/GPT-OSS ignore effort." },
 };
 const EFFORT_MODES = {
@@ -52,6 +53,14 @@ const EFFORT_MODES = {
 
 export default class AiLauncher extends View {
   init(_props, cx) {
+    // Past stages (usage/model-stats.jsonl) for the estimate under the summary (D-030).
+    this.stats = null;
+    if (!checking()) cx.spawn(async (cx) => {
+      let text = null;
+      try { text = await readTextFile(modelStatsPath()); } catch { /* no history yet */ }
+      this.stats = String(text ?? "").split(/\r?\n/).map(parseJson).filter((x) => x && x.role && x.agent);
+      cx.notify();
+    });
     this.goal = InputState.new({ placeholder: "What should the agents do?" });
     this.goal.on("change", (_e, cx) => { this.error = ""; cx.notify(); });
     this.goal.on("submit", () => this.start());
@@ -298,6 +307,40 @@ export default class AiLauncher extends View {
       .children(content);
   }
 
+  // "Estimate (your last relays): first pass ~45 min · Claude ~12 % of 5 h · OpenRouter ~$0.03 · each fix round ~+20 min"
+  estimateText(m, rounds) {
+    const rows = this.stats;
+    if (!rows || rows.length < 3) return "Estimate: shows up here after a few relays (from your own past stages).";
+    const med = (a) => { const s = a.filter((x) => typeof x === "number" && !isNaN(x)).sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+    const pick = (role) => {
+      const agent = this.roles[role];
+      const hist = rows.filter((x) => x.role === role && x.agent === agent).slice(-20);
+      if (!hist.length) return null;
+      return { agent, minutes: med(hist.map((x) => x.minutes)),
+               plan: med(hist.filter((x) => x.planAfter != null && x.planBefore != null).map((x) => x.planAfter - x.planBefore)),
+               cost: med(hist.filter((x) => x.cost != null).map((x) => x.cost)) };
+    };
+    const sum = (roles) => {
+      const out = { minutes: 0, plan: {}, cost: 0, missing: [] };
+      for (const r of roles) {
+        const e = pick(r);
+        if (!e) { out.missing.push(r); continue; }
+        out.minutes += e.minutes ?? 0;
+        if (e.plan != null) out.plan[e.agent] = (out.plan[e.agent] ?? 0) + e.plan;
+        if (e.agent === "opencode" && e.cost != null) out.cost += e.cost;
+      }
+      return out;
+    };
+    const first = sum(m.stages);
+    const loop = rounds ? sum((this.teams[this.team] ?? []).filter((r) => !r.once).map((r) => r.role)) : null;
+    const parts = [`first pass ~${Math.round(first.minutes)} min`];
+    for (const [a, p] of Object.entries(first.plan)) parts.push(`${AGENTS[a]?.name ?? a} ~${Math.round(p)} % of 5 h`);
+    if (first.cost > 0) parts.push(`OpenRouter ~$${first.cost.toFixed(2)}`);
+    if (loop && loop.minutes) parts.push(`each fix round ~+${Math.round(loop.minutes)} min`);
+    const miss = first.missing.length ? ` (no history yet for: ${first.missing.join(", ")})` : "";
+    return `Estimate from your past stages: ${parts.join(" · ")}${miss}.`;
+  }
+
   render() {
     const t = theme();
     const modes = this.modes();
@@ -403,6 +446,7 @@ export default class AiLauncher extends View {
 
       .child(div().flex_none().h(1).mt(12).bg(t.border))
       .child(div().flex_none().pt(10).text_size(11.5).text_color(t.dim).whitespace_normal().child(summary))
+      .child(div().flex_none().pt(4).text_size(11.5).text_color(t.muted).whitespace_normal().child(this.estimateText(m, rounds)))
       .when(Boolean(this.error), (el) => el.child(div().pt(6).text_size(12).text_color(t.blocked).child(this.error)))
       .child(h_flex().flex_none().pt(14).gap(8).justify_end()
         .child(this.button(t, "cancel", ["Cancel"], false, () => closeOverlay(props().overlay)))

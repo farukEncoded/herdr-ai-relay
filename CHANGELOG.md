@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.2.0 (2026-11-25)
+
+**Quota no longer stops a relay.**
+- **Fallback when an agent runs out:** a limit that resets within 20 minutes is waited out; otherwise Antigravity
+  switches model inside the running session (its Gemini models share one quota, so it moves to its Claude models),
+  and a Claude or Codex stage is handed to another agent in a "(takeover)" tab that continues from the repo's state.
+  No quota wait lasts longer than 30 minutes. Antigravity's model picker saves its choice as your default; the relay
+  puts your default back.
+- **Quota planner:** frontier agents first; relay stages use Claude only up to 75 % of its 5-hour limit (the
+  reviewer up to 90 %), so your own Claude chats keep working; before each stage the relay skips an agent that
+  probably can't finish it (learned from your past stages); near a limit the tester (and the reviewer in fix rounds)
+  starts one effort step lower, never the executor.
+
+**OpenCode + OpenRouter as an optional fourth agent.**
+- The relay picks an OpenRouter model per role from live data (listed now, tool calling, quota left, within your
+  key's budget, paced weekly), uses it as a backup when your plans run out, and measures its exact cost.
+- Free models stay off until you allow them per project (`opencode.freeModelProjects` in relay-defaults.json):
+  their providers may keep what they're sent. No key, no OpenCode stages.
+
+**Measured, so it can be tuned.**
+- Every stage of every agent is recorded (`usage/model-stats.jsonl`): model, minutes, tokens, cost, round outcome,
+  quota switches, and whether the agent kept the protocol (LOG line, signature, its own commit).
+- `tools/model-report.ps1` writes a report with charts (pass rate, cost, minutes, protocol kept, rounds to
+  approval, OpenRouter price history) and suggestions; `-Apply` makes only the safe ones.
+
+**Easier to watch.**
+- Panel: plan use with "safe until ~HH:MM", Claude's reserve, Antigravity outages, the OpenRouter week budget, a
+  Models card (Open report, Update, Apply safe), a switch mark on stages that fell back.
+- Notifications when a stage switches model, another agent takes over, the relay waits for quota, or it finishes.
+- The Start dialog shows an estimate from your past stages (minutes, plan use, cost, per fix round).
+- The relay tab prints one line per stage; the full task is in `.ai/relay/stage-N.task.txt`.
+- Setup: two new steps, "OpenCode + OpenRouter (optional)" and "Live usage and model report" (two Windows tasks).
+- A relay never opens in another project's Herdr space; one relay per project (from 0.1.2).
+
+- **Setup**: the kit version is 0.2.0, so the panel offers to update relay files copied by older versions.
+- **Setup fixes (found by installing this release on a real machine)**: Remove no longer deletes a relay file that
+  was already there with the same text, no longer re-saves programs.json when every entry was already yours, and
+  leaves Windows tasks you set up yourself alone. Step 5 shows "Already there" when your + menu has the entries.
+
 ## 0.1.2 (2026-11-25)
 
 - **Fix: a relay never lands in another project's space.** Herdr names an unnamed space after its first terminal's
