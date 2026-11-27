@@ -33,6 +33,12 @@ export const modelStatsPath = () => join(protocolDir(), "usage", "model-stats.js
 export const scoutPath = () => join(protocolDir(), "usage", "model-scout.json");
 export const scoutMjs = () => join(protocolDir(), "tools", "model-scout.mjs");
 export async function runScout(extra = []) { await exec("node", [scoutMjs(), ...extra]).catch(() => null); }
+// The selection tuner (D-035): scores per task kind, safe changes, proposals (Accept / Dismiss), ledger with rollback.
+export const tuningPath = () => protoFile("usage", "selection-tuning.json");
+export const tunerPs1 = () => protoFile("tools", "selection-tuner.ps1");
+export async function runTuner(extra = []) {
+  await exec("powershell", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", tunerPs1(), ...extra], { timeout: 120000 }).catch(() => null);
+}
 // The setup script ships inside the panel mod's folder (payload/), so it runs before anything is installed.
 export const setupPs1 = () => join(appHome(), "mods", MOD.panel, "payload", "setup.ps1");
 
@@ -279,20 +285,24 @@ export function relayLine(r) {
 export async function readProject(root, machine) {
   const rd = async (...p) => { try { return await readTextFile(join(root, ".ai", ...p), { on: machine }); } catch { return null; } };
   const glob = async (p) => { try { return await readTextFile(p); } catch { return null; } };
-  const [state, log, relay, plan, outlook, report, scout] = await Promise.all([rd("STATE.md"), rd("LOG.md"), rd("relay", "status.json"),
-    glob(planUsagePath()), glob(outlookPath()), glob(modelReportJsonPath()), glob(scoutPath())]);
+  const [state, log, relay, plan, outlook, report, scout, tuning, pauseFile, stopFile] = await Promise.all([rd("STATE.md"), rd("LOG.md"), rd("relay", "status.json"),
+    glob(planUsagePath()), glob(outlookPath()), glob(modelReportJsonPath()), glob(scoutPath()), glob(tuningPath()), rd("relay", "PAUSE"), rd("relay", "STOP")]);
   if (state == null) return { root, setup: false };
   const st = parseState(state);
   return {
     root, setup: true, updated: st.updated, active: activeAgent(st.active),
     next: items(st.sections["next"]), status: items(st.sections["status"]),
     blockers: items(st.sections["blockers"]),
-    log: parseLog(log, 4), relay: parseRelay(relay), usage: parseJson(plan), outlook: parseJson(outlook),
+    log: parseLog(log, 4), relay: withControls(parseRelay(relay), pauseFile, stopFile), usage: parseJson(plan), outlook: parseJson(outlook),
     scout: (() => { const s = parseJson(scout); if (!s) return null;
       const roles = {}; for (const [k, v] of Object.entries(s.roles ?? {})) roles[k] = { first: v.incumbent?.id ?? null, firstScore: v.incumbent?.quality ?? null,
         top: (v.leaderboard ?? []).slice(0, 3).map((x) => ({ id: x.id, q: x.quality, free: x.free, cost: x.costPerStage, measured: x.measured })), trial: v.trial ?? null };
       return { at: s.at, roles, proposals: (s.proposals ?? []).slice(0, 4), queued: (s.benchQueue ?? []).length,
                sources: (s.sources ?? []).map((x) => `${x.name}: ${x.status}`) }; })(),
+    // The selection tuner (D-035): what it learned per task kind, and proposals waiting for you.
+    tuning: (() => { const s = parseJson(tuning); if (!s) return null;
+      return { at: s.at, labelled: s.stagesWithKind ?? 0, proposals: (s.proposals ?? []).slice(0, 4), worked: (s.whatWorked ?? []).slice(0, 3),
+               applied: (s.applied ?? []).length }; })(),
     report: (() => { const r = parseJson(report); return r ? { at: r.at, stages: r.stages, cost: r.cost, days: r.days,
       suggestions: Array.isArray(r.suggestions) ? r.suggestions.filter((s) => !/^No relay stages recorded/.test(s)) : [],
       safe: Array.isArray(r.suggestions) ? r.suggestions.filter((s) => /^Remove .* from the OpenCode|: move it down\.$/.test(s)).length : 0 } : null; })(),
@@ -344,6 +354,15 @@ export async function getReview(space, folder) {
 }
 
 // Relay controls: mods only write under the app folder, so the control files go through cmd.
+// Pause and Stop act between stages, so a click shows at once as "pausing / stopping after this stage" (the control
+// file exists while the relay is still running): pausing, stopping. pauseText/stopText = what a control file read gave
+// (null = no file). The relay also reports pauseRequested/stopRequested in its heartbeat.
+export function withControls(r, pauseText, stopText) {
+  if (!r) return r;
+  const busy = r.state === "running" || r.state === "waiting";
+  return { ...r, pausing: busy && (pauseText != null || Boolean(r.pauseRequested)),
+           stopping: (busy || r.state === "paused") && (stopText != null || Boolean(r.stopRequested)) };
+}
 export async function relayControl(root, what, machine) {
   const dir = join(root, ".ai", "relay");
   const win = isWin(root);
@@ -353,6 +372,7 @@ export async function relayControl(root, what, machine) {
     if (what === "pause") await touch("PAUSE");
     else if (what === "resume") await rm("PAUSE");
     else if (what === "stop") await touch("STOP");
+    else if (what === "unstop") await rm("STOP");             // take a Stop back before the stage ends
     else if (what === "overnight") await touch("OVERNIGHT");   // switch the running relay to overnight mode
   } catch { /* the relay folder is gone */ }
 }

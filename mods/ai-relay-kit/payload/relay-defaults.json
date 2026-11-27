@@ -58,7 +58,7 @@
   "opencode": {
     "_help": "OpenCode on OpenRouter models (D-028). models: per role, best first; the relay takes the first one OpenRouter lists right now with tool calling, that has quota left and that the budget allows, and uses its free ':free' variant when one is listed and the project may use free models. freeModelProjects: project folder names that may use free models (their providers may keep prompts), or 'all'. budgetStopPercent: paid models stop when the key has used this much of its OpenRouter limit; free ones go on. budgetPace: 'weekly' = paid models may only use the share of the monthly limit for the weeks passed so far (unused weeks carry over), 'daily' the same per day, 'none' = only the limit. Every stage of every agent is recorded in usage/model-stats.jsonl; tools/model-report.ps1 turns it into the model report and suggestions (weekly task 'AI relay model report').",
     "models": {
-      "tester":   ["nvidia/nemotron-3-ultra-550b-a55b:free", "deepseek/deepseek-v4.1-flash", "z-ai/glm-5.3-flash", "z-ai/glm-5.3"],
+      "tester":   ["deepseek/deepseek-v4.1-flash", "nvidia/nemotron-3-ultra-550b-a55b:free", "z-ai/glm-5.3-flash", "z-ai/glm-5.3"],
       "executor": ["z-ai/glm-5.3", "deepseek/deepseek-v4.1-flash", "moonshotai/kimi-k3.1-pro"],
       "reviewer": ["z-ai/glm-5.3", "moonshotai/kimi-k3.1-pro"],
       "planner":  ["z-ai/glm-5.3", "moonshotai/kimi-k3.1-pro"]
@@ -78,6 +78,157 @@
     "sourceMaxAgeDays": 180,
     "maxOutPricePerM": 3,
     "minContext": 128000
+  },
+  "selection": {
+    "_help": "Model selection (D-034, docs/model-selection.md). Per stage, agent + model + effort come from five levels, most specific first: stage ('relay switch') > task (its 'Relay:' line) > run (-Profile, -Stages/-Loop, -Model, -Effort) > project (.ai/relay-profile.json, its 'default' profile) > global (this block's 'profile', then the team's agents and efforts). A spec is agent[:model][@effort] (claude:sonnet@high, codex:sol, opencode:deepseek, haiku@low); 'a|b' is a chain tried in order, the first that fits now (quota, budget, listing) runs. profile: the global profile ('team' = the team's agents). agentModels: the model an agent gets for a role when no level names one. catalog: the exact version behind each short name (claude sonnet = claude-sonnet-5-5); dominated: versions outclassed on price or quality (used only when named, with a warning). profiles: named role sets; 'extends' builds on another; 'role.recheck' = the model for small fix-round re-checks. stepDown: in fix rounds whose code change is at most maxChangedLines, the roles listed step one model down the ladder (never below floor; never the executor or planner; not after a missed or free tester). escalate.tester: who tests after a tester passed work the judge then failed. budget: OpenRouter money per run (runCapUsd) and per stage (stageCapUsd); a paid OpenCode stage expected or seen above it is not started or is handed to a plan agent; .ai/relay-profile.json 'budget' overrides it per project. typicalTokens: per role, for cost estimates before a model has history. watchdog.stallMinutes: no change on screen this long = nudge, then hand over (day and night). skipExecutorWhenDone: skip the executor when the task's work is committed and nothing was asked for. keepAwake: keep the PC from sleeping while any relay runs.",
+    "profile": "team",
+    "agentModels": {
+      "claude": { "planner": "opus", "executor": "sonnet", "tester": "sonnet", "reviewer": "opus" },
+      "codex": {},
+      "antigravity": {},
+      "opencode": {}
+    },
+    "catalog": {
+      "_help": "API price per 1M tokens (in/out) for reference and the report; plan agents use your plan quota, not this money.",
+      "claude": {
+        "fable":  { "id": "claude-fable-5-2",  "in": 8,   "out": 40,  "use": "hardest problems only; needs extra credits" },
+        "opus":   { "id": "claude-opus-5-5",   "in": 4,   "out": 20,  "use": "best planner and reviewer" },
+        "sonnet": { "id": "claude-sonnet-5-5", "in": 2,   "out": 10,  "use": "best everyday coder and tester" },
+        "haiku":  { "id": "claude-haiku-5-5",  "in": 0.1, "out": 0.5, "use": "cheap checks and simple re-checks" }
+      }
+    },
+    "dominated": ["claude-opus-5", "claude-opus-4-6", "claude-opus-4-5", "claude-opus-4-1", "claude-sonnet-5", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5", "claude-fable-5", "claude-fable-5-1"],
+    "valueNotes": "Claude Opus 5.5 = best planner and reviewer; Sonnet 5.5 = best everyday coder and tester; Haiku 5.5 = cheap checks and small re-checks; Fable 5.2 = only the hardest problems (needs credits); paid OpenRouter models resend about 200K tokens of context every step, so keep them to testing and small fixes",
+    "profiles": {
+      "simple-site": {
+        "_use": "small static site or landing page: few files, low risk",
+        "planner": "claude:sonnet@high", "executor": "claude:sonnet@high|antigravity:hydrogen@high",
+        "tester": "claude:haiku@medium|opencode", "reviewer": "claude:sonnet@high|codex:sol@medium"
+      },
+      "content-site": {
+        "_use": "multi-page content site: page copy, SEO, facts and claims to check",
+        "planner": "claude:opus@high", "executor": "claude:sonnet@high|antigravity:hydrogen@high",
+        "tester": "claude:haiku@medium|claude:sonnet@medium", "tester.recheck": "claude:haiku@low",
+        "reviewer": "claude:sonnet@high|claude:opus@medium"
+      },
+      "pwa-app": {
+        "_use": "PWA or front-end app: UI state, offline, client logic",
+        "planner": "claude:opus@high", "executor": "claude:sonnet@high|codex:sol@high|antigravity:hydrogen@high",
+        "tester": "claude:sonnet@medium|codex:astra@medium", "reviewer": "claude:opus@high|codex:sol@high"
+      },
+      "full-app": {
+        "_use": "full app with a backend: data model, auth, APIs, payments",
+        "planner": "claude:opus@xhigh", "executor": "claude:sonnet@xhigh|codex:sol@high",
+        "tester": "claude:sonnet@high|codex:sol@medium", "reviewer": "claude:opus@high|codex:sol@high"
+      },
+      "bulk-content": {
+        "_use": "many similar items: product copy, translations, data entry",
+        "planner": "claude:sonnet@medium", "executor": "claude:sonnet@high|opencode:deepseek",
+        "tester": "claude:haiku@low|opencode", "reviewer": "claude:sonnet@medium"
+      },
+      "hard-debug": {
+        "_use": "a bug that resisted normal fixes, or a risky core change",
+        "planner": "claude:opus@max", "executor": "claude:fable@high|claude:opus@xhigh",
+        "tester": "claude:sonnet@high", "reviewer": "claude:opus@xhigh"
+      },
+      "ui-heavy": {
+        "_use": "visual and layout work: components, styling, responsive pages",
+        "planner": "claude:opus@high", "executor": "antigravity:hydrogen@high|claude:sonnet@high",
+        "tester": "claude:sonnet@medium", "reviewer": "claude:opus@high"
+      },
+      "release": {
+        "_use": "the last check before going live: strict tests and review",
+        "planner": "claude:opus@high", "executor": "claude:sonnet@high",
+        "tester": "claude:sonnet@high", "reviewer": "claude:opus@xhigh"
+      },
+      "assets": {
+        "_use": "images, icons, illustrations, brand files (Codex generates images)",
+        "planner": "claude:sonnet@high", "executor": "codex:sol@high|antigravity:hydrogen@high",
+        "tester": "claude:haiku@medium", "reviewer": "claude:sonnet@medium"
+      }
+    },
+    "projectTypes": {
+      "_help": "D-035. The planner classifies a new project as one of these (complexity S|M|L, risk low|medium|high) and writes .ai/relay-profile.json: {\"projectType\", \"complexity\", \"risk\", \"default\": <profile>, \"budget\"}. profile = the role set for tasks without labels; typical = the task kinds such a project usually needs, in order; budget = OpenRouter money per run.",
+      "landing":            { "use": "one page that sells one thing: hero, sections, a form",               "profile": "simple-site",  "typical": "ui, content, assets, integration, deploy", "budget": 0.5 },
+      "brochure":           { "use": "a few static pages about a business",                                 "profile": "simple-site",  "typical": "ui, content, assets, deploy", "budget": 0.5 },
+      "content-site":       { "use": "many pages of copy, SEO, facts and claims to check",                  "profile": "content-site", "typical": "ui, content, bulk, assets, integration, deploy", "budget": 1.0 },
+      "blog-cms":           { "use": "posts or pages managed through a CMS",                                 "profile": "content-site", "typical": "ui, integration, content, data, deploy", "budget": 1.0 },
+      "ecommerce":          { "use": "catalogue, cart, checkout, payments, orders",                         "profile": "full-app",     "typical": "data, backend, ui, integration, tests, deploy", "budget": 2.0 },
+      "booking":            { "use": "availability, bookings, reminders, payments",                          "profile": "full-app",     "typical": "data, backend, ui, integration, tests, deploy", "budget": 2.0 },
+      "web-app":            { "use": "a SaaS or tool with accounts and its own logic",                       "profile": "full-app",     "typical": "data, backend, logic, ui, tests, deploy", "budget": 2.0 },
+      "pwa":                { "use": "installable front-end app, offline, client state",                     "profile": "pwa-app",      "typical": "ui, logic, data, tests, deploy", "budget": 1.5 },
+      "dashboard":          { "use": "admin or analytics screens over existing data",                        "profile": "pwa-app",      "typical": "data, ui, logic, tests", "budget": 1.5 },
+      "api-backend":        { "use": "an API, worker or service without much UI",                            "profile": "full-app",     "typical": "data, backend, integration, tests, deploy", "budget": 2.0 },
+      "redesign-migration": { "use": "moving an existing site to a new stack or design without losing anything", "profile": "release", "typical": "research, ui, content, data, tests, deploy", "budget": 1.5 },
+      "bulk-content":       { "use": "many similar items: product pages, translations, data entry",          "profile": "bulk-content", "typical": "bulk, content, tests", "budget": 1.0 },
+      "brand-assets":       { "use": "logos, images, icons, social and print files",                         "profile": "assets",       "typical": "assets, docs", "budget": 0.5 }
+    },
+    "kinds": {
+      "_help": "D-035. The planner labels every task 'Labels: kind=<kind>, size=S|M|L, risk=low|medium|high'. Each kind's role chains cover all four agents (a|b = next if a doesn't fit now; a~b = equally good: the one with the most quota left goes first). The daily tuner (tools/selection-tuner.ps1) may reorder them per kind in usage/selection-tuning.json; risk and size rules apply on top.",
+      "ui":          { "use": "layout, components, styling, responsive pages",       "executor": "antigravity:hydrogen@high|claude:sonnet@high",  "tester": "claude:sonnet@medium",                    "reviewer": "claude:opus@high" },
+      "content":     { "use": "page copy, headings, SEO text, legal pages",           "executor": "claude:sonnet@high",                            "tester": "claude:haiku@medium|claude:sonnet@medium", "reviewer": "claude:sonnet@high" },
+      "bulk":        { "use": "many similar items in one task",                       "executor": "claude:sonnet@high|opencode:deepseek",         "tester": "claude:haiku@low|opencode",               "reviewer": "claude:sonnet@medium" },
+      "assets":      { "use": "images, icons, illustrations, favicons, OG images",    "executor": "codex:sol@high|antigravity:hydrogen@high",     "tester": "claude:haiku@medium",                     "reviewer": "claude:sonnet@medium" },
+      "logic":       { "use": "client logic, state, calculations, validation",        "executor": "claude:sonnet@high~codex:sol@high",            "tester": "claude:sonnet@medium~codex:astra@medium", "reviewer": "claude:opus@high" },
+      "backend":     { "use": "server code, auth, APIs, workers, payments",           "executor": "claude:sonnet@xhigh~codex:sol@high",           "tester": "claude:sonnet@high",                      "reviewer": "claude:opus@high" },
+      "data":        { "use": "data model, schema, migrations, seed data, CMS models", "executor": "claude:sonnet@high~codex:sol@high",           "tester": "claude:sonnet@medium",                    "reviewer": "claude:opus@high" },
+      "integration": { "use": "forms, CRM, email, analytics, third-party APIs",       "executor": "claude:sonnet@high~codex:sol@high",            "tester": "claude:sonnet@high",                      "reviewer": "claude:opus@high" },
+      "deploy":      { "use": "hosting, CI, domains, environment, build config",      "executor": "codex:sol@high~claude:sonnet@high",            "tester": "claude:sonnet@high",                      "reviewer": "claude:opus@high" },
+      "bugfix":      { "use": "a defect with a known symptom",                        "executor": "claude:sonnet@xhigh|codex:sol@high",           "tester": "claude:sonnet@medium",                    "reviewer": "claude:opus@high" },
+      "refactor":    { "use": "restructure without changing behaviour",               "executor": "claude:sonnet@high~codex:sol@high",            "tester": "claude:sonnet@medium",                    "reviewer": "claude:opus@medium" },
+      "tests":       { "use": "write or fix automated tests",                          "executor": "codex:sol@high~claude:sonnet@high",            "tester": "claude:haiku@medium",                     "reviewer": "claude:sonnet@high" },
+      "docs":        { "use": "README, guides, handover notes",                       "executor": "claude:sonnet@high",                            "tester": "claude:haiku@low",                        "reviewer": "claude:sonnet@medium" },
+      "research":    { "use": "investigate, compare options, audit an existing site", "executor": "claude:opus@high",                              "tester": "claude:haiku@low",                        "reviewer": "claude:sonnet@high" }
+    },
+    "risk": {
+      "_help": "Applied on top of the kind (D-035). high = mistakes are expensive (payments, auth, data loss, legal claims, going live); low = easy to see and undo.",
+      "high": { "tester": "claude:sonnet@high", "reviewer": "claude:opus@xhigh" },
+      "low":  { "reviewer": "claude:sonnet@high" }
+    },
+    "size": {
+      "_help": "L tasks (and high-risk ones) get a refiner stage before the executor, and the executor thinks at xhigh.",
+      "L": { "executorEffort": "xhigh" }
+    },
+    "refiner": {
+      "_help": "The task refiner (D-035): before the executor of a Size L or Risk high task, it sharpens the task file (approach, files, acceptance criteria, test plan, pitfalls). No production code.",
+      "when": { "sizes": ["L"], "risks": ["high"] },
+      "use": "claude:opus@high|codex:sol@high",
+      "job": "Sharpen the task file before it is built: a concrete approach, the files to touch, testable acceptance criteria, a test plan and the pitfalls. Write no production code."
+    },
+    "planner": {
+      "_help": "The project planner's effort: xhigh when .ai/relay-profile.json says complexity L or risk high (D-035).",
+      "bigEffort": "xhigh"
+    },
+    "explore": {
+      "_help": "D-035. 1 in 'every' low-risk tasks (not Size L) tries one model cheaper for the listed roles, on plan agents only (never paid OpenRouter, never the reviewer). The tuner learns from these tries.",
+      "every": 10,
+      "roles": ["executor", "tester"],
+      "floor": { "executor": { "claude": "haiku", "codex": "luna" }, "tester": { "claude": "haiku", "codex": "luna" } }
+    },
+    "tuner": {
+      "_help": "tools/selection-tuner.ps1 (daily, by the supervisor). Only with minSamples per kind/role/model. Safe changes it applies itself: demote a model whose stall or miss rate reaches demoteRate; move a cheaper plan model before a dearer one when it does at least as well. Anything that costs more becomes a proposal (Accept/Dismiss in the panel) when it is at least 'margin' better. Changes live in usage/selection-tuning.json, every one in usage/selection-ledger.jsonl, undone with -Rollback <id>.",
+      "days": 45,
+      "ignoreProjects": ["^relay-e2e-", "^relay-v2-", "^relay-explain-", "^bench-", "^(tester|executor|reviewer)-"],
+      "minSamples": 5,
+      "demoteRate": 0.3,
+      "margin": 0.15
+    },
+    "stepDown": {
+      "roles": ["tester", "reviewer"],
+      "maxChangedLines": 120,
+      "ladders": { "claude": ["fable", "opus", "sonnet", "haiku"], "codex": ["sol", "astra", "terra", "luna"] },
+      "floor": { "tester": { "claude": "haiku", "codex": "terra" }, "reviewer": { "claude": "sonnet", "codex": "astra" } }
+    },
+    "escalate": { "tester": "claude:sonnet@high|codex:sol@medium" },
+    "budget": { "runCapUsd": 3.0, "stageCapUsd": 1.5 },
+    "typicalTokens": { "planner": 800000, "executor": 3000000, "tester": 1500000, "reviewer": 1000000 },
+    "watchdog": { "stallMinutes": { "default": 30, "tester": 15, "reviewer": 20 } },
+    "skipExecutorWhenDone": true,
+    "keepAwake": true
+  },
+  "permissions": {
+    "_help": "D-036. Projects whose relays start every agent WITHOUT permission checks in the daytime too, as overnight runs do (Claude and Antigravity --dangerously-skip-permissions, Codex without its sandbox, OpenCode --auto): the agents then run any command and change any file without asking. skipProjects: project folder names or full paths, or \"all\". One run instead: ai-relay.ps1 -SkipPermissions; -KeepPermissions always keeps the checks. Only here (your own file), never in a project's .ai/relay-profile.json, which agents write.",
+    "skipProjects": []
   },
   "maxRounds": 3,
   "askEachRound": true,

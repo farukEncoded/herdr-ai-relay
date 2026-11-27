@@ -13,7 +13,7 @@ import {
   activeSpace, spaceDir, findRoot, readProject, join, baseName, samePath, loadRuns,
   continueWith, setupProtocol, getReview, relayControl, openHandoff, openLauncher, openCommands, AGENT_NAME,
   SHARED_FOCUS, focusPanel, onWindows, MOD,
-  notifyPath, parseJson, openModelReport, runModelReport, runScout,
+  notifyPath, parseJson, openModelReport, runModelReport, runScout, runTuner,
 } from "./lib.js";
 import { Setup } from "./setup.js";
 
@@ -161,7 +161,7 @@ export default class AiProject extends View {
     if (what === "relay") return openLauncher();
     if (what === "handoff") return openHandoff(folder, "HANDOFF", space);
     if (what === "commands") return openCommands();
-    if (["pause", "resume", "stop", "overnight"].includes(what)) return relayControl(folder, what, machine).then(() => null);
+    if (["pause", "resume", "stop", "unstop", "overnight"].includes(what)) return relayControl(folder, what, machine).then(() => null);
     if (what === "goto" && this.data?.relay?.terminal) run("pane.focus", { terminal: this.data.relay.terminal });
     // The relay's own tab, where it asks its questions (fix round? queue? timeout?). Relays before 2026-11-22 21:00
     // don't record it: then the newest "AI Relay" tab in this space that still has a terminal.
@@ -196,6 +196,8 @@ export default class AiProject extends View {
     const working = agents().some((a) => a.space === space?.id && a.status === "working");
     if (!d) return null;
     if (!d.setup) return { text: samePath(d.root, home()) ? "No project" : "Not set up", color: t.dim };
+    if (r?.stopping) return { text: "Stopping after this stage", color: t.blocked, dot: true, pulse: true };
+    if (r?.pausing) return { text: "Pausing after this stage", color: t.ansi3, dot: true, pulse: true };
     if (r?.state === "paused") return { text: "Paused", color: t.ansi3, dot: true };
     if (r?.state === "running") return { text: "Relay running", color: t.accent, dot: true, pulse: true };
     if (d.active || working) return { text: "Agent active", color: t.working, dot: true, pulse: working };
@@ -392,9 +394,34 @@ export default class AiProject extends View {
           .child(btn(`prop-no-${i}`, "Dismiss 30 days", () => act(["--dismiss", `${p.role}:${p.model}`]))))));
   }
 
+  // Selection tuner (D-035): what built each kind of task best, and proposals with Accept / Dismiss.
+  tunerCard(t, s) {
+    const btn = (id, label, action, primary) => h_flex().id(id).h(22).px(7).items_center().rounded(6)
+      .border(1).border_color(t.border).text_size(11).text_color(primary ? t.foreground : t.muted).cursor_pointer()
+      .hover((st) => st.bg(t.hover).text_color(t.foreground)).on_click(action).child(label);
+    const act = (args) => { this.sig = null; runTuner(args).finally(() => { this.sig = null; }); };
+    return v_flex().mx(8).mt(6).p(10).gap(5).rounded(9).bg(t.background).border(1).border_color(t.border).flex_none()
+      .child(h_flex().gap(6).items_center()
+        .child(div().flex_1().text_size(11).text_color(t.muted)
+          .tooltip("Learns per task kind which model does the job best for the least. Applies only safe changes by itself; undo one with tools\\selection-tuner.ps1 -Rollback <id>.")
+          .child(`Selection tuner · ${hhmm(s.at)} · ${s.labelled} labelled stages${s.applied ? ` · ${s.applied} applied today` : ""}`))
+        .child(btn("tuner-run", "Refresh", () => act([]))))
+      .children((s.worked ?? []).map((w, i) => div().id(`tw-${i}`).text_size(10.5).text_color(t.muted).truncate().tooltip(w).child(w)))
+      .when(!(s.worked ?? []).length, (el) => el.child(div().text_size(10.5).text_color(t.dim).child("Learns once labelled tasks have run.")))
+      .children((s.proposals ?? []).map((p, i) => v_flex().id(`tprop-${i}`).gap(3).mt(2).p(6).rounded(6).bg(t.raised)
+        .child(div().text_size(10.5).text_color(t.foreground).whitespace_normal().child(`${p.kind} ${p.role}: ${p.to}`))
+        .child(div().text_size(10).text_color(t.dim).whitespace_normal().child(p.reason))
+        .child(h_flex().gap(6)
+          .child(btn(`tprop-ok-${i}`, "Accept", () => act(["-Accept", p.id]), true))
+          .child(btn(`tprop-no-${i}`, "Dismiss 30 days", () => act(["-Dismiss", p.id]))))));
+  }
+
   relayCard(t, r) {
-    const stateText = { running: "Running", waiting: "Needs you", paused: "Paused", finished: "Finished", stopped: "Stopped", lost: "Not responding" }[r.state] ?? r.state;
-    const stateColor = { running: t.accent, waiting: t.ansi3, paused: t.ansi3, finished: t.muted, stopped: t.dim, lost: t.dim }[r.state] ?? t.dim;
+    // A Pause or Stop click takes effect between stages: show it at once ("pausing/stopping after this stage").
+    const stateText = r.stopping ? "Stopping after this stage" : r.pausing ? "Pausing after this stage"
+      : { running: "Running", waiting: "Needs you", paused: "Paused", finished: "Finished", stopped: "Stopped", lost: "Not responding" }[r.state] ?? r.state;
+    const stateColor = r.stopping ? t.blocked : r.pausing ? t.ansi3
+      : { running: t.accent, waiting: t.ansi3, paused: t.ansi3, finished: t.muted, stopped: t.dim, lost: t.dim }[r.state] ?? t.dim;
     const stages = Array.isArray(r.stages) ? r.stages : [];
     const queue = Array.isArray(r.queue) ? r.queue.filter(Boolean) : [];
     const done = stages.filter((s) => s.state === "done").length;
@@ -464,8 +491,12 @@ export default class AiProject extends View {
       .when(r.live, (el) => el.child(h_flex().gap(6).pt(1)
         .child(r.state === "paused"
           ? textBtn("relay-resume", "play", "Resume", () => this.act("resume"))
-          : textBtn("relay-pause", "pause", "Pause", () => this.act("pause")))
-        .child(textBtn("relay-stop", "stop", "Stop", () => this.act("stop"), true))
+          : r.pausing
+            ? textBtn("relay-resume", "play", "Don't pause", () => this.act("resume"))
+            : textBtn("relay-pause", "pause", "Pause", () => this.act("pause")))
+        .child(r.stopping
+          ? textBtn("relay-unstop", "play", "Don't stop", () => this.act("unstop"))
+          : textBtn("relay-stop", "stop", "Stop", () => this.act("stop"), true))
         // Switch this running relay to overnight mode, or change an overnight relay's limits: opens a small box
         // (Run until a time / until done, Cycles); the relay picks it up within seconds, also mid-question.
         // Relays started before "Make overnight" existed (their status has no 'overnight' field) never read the
@@ -520,6 +551,7 @@ export default class AiProject extends View {
     rows.push(this.section(t, "sec-models", "Models"));
     rows.push(this.modelsCard(t, d.report));
     if (d.scout) rows.push(this.scoutCard(t, d.scout));
+    if (d.tuning) rows.push(this.tunerCard(t, d.tuning));
 
     // Next: the first five items of STATE's ## Next.
     rows.push(this.section(t, "sec-next", "Next"));
@@ -576,7 +608,7 @@ export default class AiProject extends View {
         .children(AGENT_KEYS.map((k) => btn(`rail-${k}`, agentIcon(k, 15), tip(`Continue with ${AGENTS[k].name}`, k), k)))
         .child(btn("rail-relay", image(relayIcon()).size(16).flex_none(), tip("Start relay…", "relay"), "relay"))
         .child(btn("rail-handoff", icon("handoff", 15), tip("Open handoff", "handoff"), "handoff"))
-        .when(Boolean(d.relay?.live), (el) => el.child(d.relay.state === "paused"
+        .when(Boolean(d.relay?.live), (el) => el.child(d.relay.state === "paused" || d.relay.pausing
           ? btn("rail-resume", icon("play", 14), "Resume relay", "resume")
           : btn("rail-pause", icon("pause", 14), "Pause relay", "pause"))))
       .when(Boolean(d && !d.setup), (el) => el.child(btn("rail-setup", icon("sparkles", 15), "Set up protocol", "setup")));

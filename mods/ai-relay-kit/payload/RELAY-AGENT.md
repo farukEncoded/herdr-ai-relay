@@ -27,8 +27,9 @@ Relay setup for <project>   (reply "ok" for all defaults, or change any line, e.
 4 Fix rounds: 3, ask before each: yes
 5 Effort:    recommended (each role's own effort; coding: planner high, executor high, tester medium, reviewer high)
              or: agent default | custom e.g. planner=xhigh,tester=low   (the executor is always high or above)
-6 Models:    agent defaults (Claude Opus 5.5, Codex GPT-6.2-Sol, Antigravity Gemini 4 Hydrogen, OpenCode: the
-             relay's picker, best free or cheap OpenRouter model per role)
+6 Models:    smart selection (each task's Relay: line, then .ai/relay-profile.json, then relay-defaults.json
+             "selection": Claude planner/reviewer Opus 5.5, executor/tester Sonnet 5.5; OpenCode: the relay's picker)
+             or a profile: <names from selection.profiles, e.g. content-site, full-app, release>
              or custom: claude fable|opus|sonnet|haiku, codex sol|astra|terra|luna,
              antigravity hydrogen|flash|sonnet|opus|gpt-oss, opencode glm|deepseek|kimi|nemotron|mimo
 7 Stage timeout: 120 min
@@ -51,6 +52,13 @@ relay before the user answered.
 - A role given to "me" is written `role=here`, plus `-HereTerminal $env:HC_TERMINAL_ID -HereAgent <claude|codex|antigravity>`
   (what you are). Model and effort of "here" roles stay as this session has them.
 - Never put double quotes inside -Goal (use ' instead).
+- Permissions (D-036): projects listed in relay-defaults.json `permissions.skipProjects` start every agent without
+  permission checks in the daytime too (as overnight). Never add a project there yourself: only the user does. For
+  one run the user may ask for `-SkipPermissions`; `-KeepPermissions` always keeps the checks.
+- Models (D-034, docs/model-selection.md): smart selection = leave out -Model; a profile = `-Profile <name>`; custom =
+  `-Model "role=name,..."`. Leave out -Effort when the user kept "recommended". Per stage the relay takes agent, model
+  and effort from: a live switch > the task's Relay: line > this run's choices > .ai/relay-profile.json > defaults.
+  -Stages/-Loop count as a choice only where a role's agent differs from the team's.
 - Plan quota is handled by the relay itself (relay-defaults.json `fallback`, D-027): a limit that resets within
   `waitMinutes` is waited out; otherwise Antigravity switches model inside its session (Gemini -> its Claude models),
   and a Claude or Codex stage is handed to another agent. Near a limit the tester (and the reviewer in fix rounds)
@@ -65,10 +73,20 @@ relay before the user answered.
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File "{{PROTOCOL_DIR}}\ai-relay.ps1" -Folder "<project root>" `
   -Goal "<goal>" -Stages "executor=here,tester=codex,reviewer=claude" -Loop "executor=here,tester=codex,reviewer=claude" `
-  -MaxRounds 3 -AskEachRound -TimeoutMin 120 -Effort recommended -Model default -Team coding `
+  -MaxRounds 3 -AskEachRound -TimeoutMin 120 -Team coding `
   -HereTerminal $env:HC_TERMINAL_ID -HereAgent antigravity
 ```
 Leave out -AskEachRound when the user said no; leave out -HereTerminal/-HereAgent when nobody is "me".
+
+## Changing models of a relay that is already running, or checking what it would pick
+"Use Sonnet for the next executor", "switch the tester to Haiku for the rest of the run": don't stop or restart the
+relay. Run once, in the foreground (the running stage finishes as it is; the next stage of that role takes it):
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "{{PROTOCOL_DIR}}\ai-relay.ps1" -Switch "executor=claude:sonnet@high" `
+  -Folder "<project root>"                    # add -SwitchScope run for the rest of the run; -Switch clear undoes
+```
+"Which models would T-037 get?": `ai-relay.ps1 -Explain -Tasks T-037 -Folder "<project root>"` prints each role's
+agent, model, effort and why; it starts nothing and doesn't disturb a running relay.
 
 ## Switching a relay that is already running to overnight (or changing its overnight limits)
 When the user asks e.g. "make the running relay overnight until 9, 5 cycles" or "let it run until done", don't start

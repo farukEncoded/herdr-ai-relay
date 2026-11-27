@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.4.0 (2026-11-27)
+
+**Smart model selection: the planner does the heavy lifting, the relay picks the model, and it learns every day.**
+- **The planner plans the work, not the models.** On a new project it writes `.ai/relay-profile.json`: the project
+  type (13 types, from landing page to web app), its complexity and risk, and an OpenRouter budget. It splits the work
+  into tasks with one kind of work each and labels them `Labels: kind=ui, size=M, risk=low` (14 kinds).
+- **Labels pick the agent and model** for every role, across all four agents. For example: assets go to Codex (image
+  generation), UI to Antigravity, copy and logic to Claude Sonnet, review to Opus. Risk and size adjust the tester and
+  reviewer. Equally good choices start on the plan with the most quota left.
+- **Large or risky tasks get a refiner** that sharpens the task file before it is built.
+- **Five levels, most specific wins:** a live switch, the task's `Relay:` line, its labels, the run's options, the
+  project profile, then your defaults. `relay switch executor=claude:sonnet@high` changes the next stage without
+  stopping the relay; `relay explain T-012` shows what each role would get, and why.
+- **Spends less:** after a small fix, testers and reviewers step one model down. A free tester is never the only check,
+  and a tester that passed what the reviewer then failed is upgraded. Every relay has an OpenRouter budget per run and
+  per stage. The executor is skipped when the work is already committed. The PC stays awake while a relay runs.
+- **Learns day by day:** every task's outcome is recorded. `tools/selection-tuner.ps1` scores each kind, role and
+  model. It applies only safe changes itself (it demotes models that stall or miss, and moves a cheaper model of the
+  same agent first when it did as well); anything else is a proposal you accept in the panel. Every change can be
+  rolled back. 1 in 10 low-risk tasks tries a cheaper model so it can learn.
+- **Model report:** day by day, by task kind, the tuner's changes, and what was saved compared with running everything
+  on Opus.
+- **Daytime permissions, opt-in per project:** list a project in `permissions.skipProjects` (or run with
+  `-SkipPermissions`) and its agents start without permission checks, as overnight runs do. The list is empty by
+  default.
+- **Panel and floating pill:** Pause and Stop show at once as "pausing/stopping after this stage", with buttons to undo
+  them. A relay that stopped responding stays visible as a grey pill. A new *Selection tuner* card shows proposals.
+- **Fixes:** a queue task no longer inherits the previous task's fix-round number.
+- **Setup**: the kit version is 0.4.0. Your relay-defaults.json is kept; copy the new `selection` and `permissions`
+  blocks from the kit's file to use the matrix and profiles (without them the relay behaves as before).
 ## 0.3.1 (2026-11-25)
 
 - **The LOG stays complete.** When a stage finishes without writing its line in `.ai/LOG.md` (some OpenCode models

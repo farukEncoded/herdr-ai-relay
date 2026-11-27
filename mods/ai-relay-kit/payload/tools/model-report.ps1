@@ -178,8 +178,44 @@ if ($Apply -and $applyOps.Count -and $chains) {
   }
 }
 
+# ---------- per task and per stage (D-034): what each task cost, and the latest stages one by one ----------
+$taskSpend = @($rows | Where-Object { $_.task } | Group-Object { "$($_.project)|$($_.task)" } | ForEach-Object {
+  $p = $_.Name -split '\|', 2
+  $c = @($_.Group | Where-Object { $null -ne $_.cost } | ForEach-Object { [double]$_.cost })
+  $orc = @($_.Group | Where-Object { $_.agent -eq 'opencode' -and -not $_.free -and $null -ne $_.cost } | ForEach-Object { [double]$_.cost })
+  [pscustomobject]@{ project = $p[0]; task = $p[1]; stages = $_.Count
+    tokens = [int64](@($_.Group | Where-Object { $_.tokens } | ForEach-Object { [double]$_.tokens }) | Measure-Object -Sum).Sum
+    cost = [math]::Round(($c | Measure-Object -Sum).Sum, 3); openrouter = [math]::Round(($orc | Measure-Object -Sum).Sum, 3)
+    minutes = [math]::Round((@($_.Group | ForEach-Object { [double]$_.minutes }) | Measure-Object -Sum).Sum, 0)
+    last = ($_.Group | ForEach-Object { [datetime]$_.at } | Sort-Object | Select-Object -Last 1) } } | Sort-Object last -Descending | Select-Object -First 25)
+$recent = @($rows | Sort-Object { [datetime]$_.at } | Select-Object -Last 40)
+[array]::Reverse($recent)
+$misses = @(Read-Lines (Join-Path $usage 'tester-misses.jsonl') | Where-Object { $_.at -and [datetime]$_.at -ge $since })
+# ---------- D-035: per kind (the tuner's scores), day by day, the tuner's changes, savings ----------
+$outcomes = @(Read-Lines (Join-Path $usage 'task-outcomes.jsonl') | Where-Object { $_.at -and [datetime]$_.at -ge $since })
+$tuning = $null; try { $tuning = Get-Content (Join-Path $usage 'selection-tuning.json') -Raw -Encoding UTF8 | ConvertFrom-Json } catch {}
+$tLedger = @(Read-Lines (Join-Path $usage 'selection-ledger.jsonl') | Where-Object { $_.at -and [datetime]$_.at -ge $since })
+$byDay = @($rows | Group-Object { ([datetime]$_.at).ToString('yyyy-MM-dd') } | Sort-Object Name | ForEach-Object {
+  $d = $_.Name
+  $o = @($outcomes | Where-Object { ([datetime]$_.at).ToString('yyyy-MM-dd') -eq $d })
+  [pscustomobject]@{ day = $d; stages = $_.Count
+    cost = [math]::Round((@($_.Group | Where-Object { $null -ne $_.cost } | ForEach-Object { [double]$_.cost }) | Measure-Object -Sum).Sum, 2)
+    tasks = $o.Count; first = $(if ($o.Count) { [math]::Round(100 * @($o | Where-Object { $_.approvedFirst }).Count / $o.Count) } else { $null })
+    stalls = @($_.Group | Where-Object { $_.stalled -or $_.state -eq 'skipped' }).Count } })
+# Claude's API-equivalent saved by not running every Claude stage on Opus (catalog input prices; plan quota, not money).
+$cat = $defs.selection.catalog.claude
+$saved = 0.0
+if ($cat) {
+  foreach ($r in @($rows | Where-Object { $_.agent -eq 'claude' -and $null -ne $_.cost -and $_.model })) {
+    foreach ($k in @('haiku', 'sonnet')) { if (([string]$r.model).ToLower().Contains($k) -and $cat.$k.in -gt 0) { $saved += [double]$r.cost * ([double]$cat.opus.in / [double]$cat.$k.in - 1) } }
+  }
+}
+$saved = [math]::Round($saved, 2)
+
 # ---------- outputs ----------
 $summary = [ordered]@{ at = (Get-Date).ToString('o'); days = $Days; stages = $rows.Count
+  savedVsOpusUsd = $saved; byDay = $byDay
+  tasks = $taskSpend; testerMisses =@($misses | Group-Object { "$($_.agent):$($_.model)" } | ForEach-Object { [ordered]@{ model = $_.Name; misses = $_.Count } })
   cost = [math]::Round((@($rows | Where-Object { $null -ne $_.cost } | ForEach-Object { [double]$_.cost }) | Measure-Object -Sum).Sum, 4)
   openrouter = $(if ($keyInfo) { [ordered]@{ limit = $keyInfo.limit; used = [math]::Round([double]$keyInfo.usage, 4); reset = $keyInfo.limit_reset } } else { $null })
   suggestions = @($sugg); applied = $applied; table = $table }
@@ -238,6 +274,23 @@ $rowsHtml = ($table | ForEach-Object {
   "<td>$(if ($null -ne $_.pass) { "$($_.pass) % <span class='dim'>($($_.passKind), $($_.judged))</span>" } else { '<span class=''dim''>-</span>' })</td>" +
   "<td>$($_.minutes)</td><td>$(if ($_.tokens) { '{0:N0}' -f $_.tokens } else { '-' })</td><td>$(if ($null -ne $_.cost) { '$' + $_.cost } else { '-' })</td><td>$($_.switches)</td>" +
   "<td>$(if ($null -ne $_.protocol) { "$($_.protocol) %" } else { '-' })</td><td>$(if ($null -ne $_.rounds) { $_.rounds } else { '-' })</td></tr>" }) -join "`n"
+$money = { param($v) if ($null -ne $v -and "$v" -ne '') { '$' + ('{0:N2}' -f [double]$v) } else { '-' } }
+$taskHtml = ($taskSpend | ForEach-Object {
+  "<tr><td>$(Html-Text $_.project)</td><td>$(Html-Text $_.task)</td><td>$($_.stages)</td><td>$($_.minutes)</td><td>$('{0:N0}' -f $_.tokens)</td><td>$(& $money $_.cost)</td><td>$(& $money $_.openrouter)</td></tr>" }) -join "`n"
+$recentHtml = ($recent | ForEach-Object {
+  "<tr><td>$(([datetime]$_.at).ToString('dd MMM HH:mm'))</td><td>$(Html-Text $_.project)</td><td>$(Html-Text $_.task)</td><td>$(Html-Text $_.role)$(if ($_.recheck) { ' <span class=''dim''>re-check</span>' })</td>" +
+  "<td>$(Html-Text $_.agent) $(Html-Text (Model-Label $_))</td><td>$(Html-Text $_.effort)</td><td class='dim'>$(Html-Text $_.source)</td><td>$($_.minutes)</td>" +
+  "<td>$(if ($_.tokens) { '{0:N0}' -f [double]$_.tokens } else { '-' })</td><td>$(& $money $_.cost)</td><td>$(Html-Text $_.state)$(if ($_.testResult) { " / $($_.testResult)" })$(if ($_.verdict) { " / $($_.verdict)" })</td></tr>" }) -join "`n"
+$kindHtml = if ($tuning -and @($tuning.units).Count) { ($tuning.units | ForEach-Object {
+  "<tr><td>$(Html-Text $_.kind)</td><td>$(Html-Text $_.role)</td><td>$(Html-Text $_.cand)</td><td>$($_.n)</td><td>$([math]::Round(100 * [double]$_.rate)) %</td><td>$($_.stalls)</td><td>$($_.misses)</td><td>$(& $money $_.avgCost)</td><td>$($_.avgMin)</td></tr>" }) -join "`n" } else { '' }
+$dayHtml = ($byDay | ForEach-Object { "<tr><td>$($_.day)</td><td>$($_.stages)</td><td>$($_.tasks)</td><td>$(if ($null -ne $_.first) { "$($_.first) %" } else { '-' })</td><td>$($_.stalls)</td><td>$(& $money $_.cost)</td></tr>" }) -join "`n"
+$tuneHtml = ''
+if ($tuning) {
+  $tuneHtml += if (@($tuning.proposals).Count) { '<p><b>Waiting for you</b> (Accept or Dismiss in the panel):</p><ul>' + (($tuning.proposals | ForEach-Object { "<li>$(Html-Text $_.kind) $(Html-Text $_.role): $(Html-Text $_.to) <span class='dim'>($(Html-Text $_.reason))</span></li>" }) -join '') + '</ul>' } else { '<p class="dim">No proposals waiting.</p>' }
+  if (@($tuning.whatWorked).Count) { $tuneHtml += '<p><b>What worked</b> (the planner sees this):</p><ul>' + (($tuning.whatWorked | ForEach-Object { "<li>$(Html-Text $_)</li>" }) -join '') + '</ul>' }
+}
+$tuneHtml += if ($tLedger.Count) { '<p><b>Changes</b> (undo one: <code>tools\selection-tuner.ps1 -Rollback &lt;id&gt;</code>):</p><ul>' + (($tLedger | Select-Object -Last 15 | ForEach-Object { "<li>$(([datetime]$_.at).ToString('dd MMM')) <code>$(Html-Text $_.id)</code> $(Html-Text $_.action) $(Html-Text $_.kind) $(Html-Text $_.role)$(if ($_.to) { ': ' + (Html-Text $_.to) }) <span class='dim'>$(Html-Text $_.reason)</span></li>" }) -join '') + '</ul>' } else { '<p class="dim">The tuner has changed nothing yet.</p>' }
+$missHtml = if ($misses.Count) { '<p>Testers that said PASS in a round the judge then failed: ' + (Html-Text ((@($misses | Group-Object { "$($_.agent) $($_.model)" } | ForEach-Object { "$($_.Name) x$($_.Count)" })) -join ', ')) + '. Two in 30 days in one project leave a model out of automatic picks there.</p>' } else { '<p class="dim">No tester missed a failing criterion in this period.</p>' }
 $suggHtml = if ($sugg.Count) { '<ul>' + (($sugg | ForEach-Object { "<li>$(Html-Text $_)</li>" }) -join '') + '</ul>' } else { '<p class="dim">Nothing to change.</p>' }
 $appliedHtml = if ($applied) { '<p><b>Applied:</b> ' + (Html-Text ($applied -join '; ')) + ' (backup: relay-defaults.json.bak)</p>' } else { '' }
 $orHtml = if ($keyInfo) { "OpenRouter key: `$$([math]::Round([double]$keyInfo.usage, 3)) used of `$$($keyInfo.limit) ($($keyInfo.limit_reset))." } else { 'OpenRouter key: not readable.' }
@@ -263,6 +316,15 @@ polyline.ln{fill:none}
 <h2>OpenRouter output price history (per 1M tokens)</h2><div class="card">$(Lines $series)</div>
 <h2>All numbers</h2><div class="card"><table><tr><th>Role</th><th>Agent</th><th>Model</th><th>Runs</th><th>Done</th><th>Pass</th><th>Avg min</th><th>Avg tokens</th><th>Avg cost</th><th>Quota switches</th><th>Protocol kept</th><th>Rounds to approval</th></tr>
 $rowsHtml</table></div>
+<h2>Spend per task</h2><div class="card"><table><tr><th>Project</th><th>Task</th><th>Stages</th><th>Minutes</th><th>Tokens</th><th>Cost</th><th>OpenRouter (real money)</th></tr>
+$taskHtml</table><p class="dim">Cost: OpenCode exact, Claude the API-equivalent from its status line (your plan pays it, not money); Codex and Antigravity report none.</p></div>
+<h2>Latest stages</h2><div class="card"><table><tr><th>When</th><th>Project</th><th>Task</th><th>Role</th><th>Model</th><th>Effort</th><th>Chosen by</th><th>Min</th><th>Tokens</th><th>Cost</th><th>Result</th></tr>
+$recentHtml</table><p class="dim">Chosen by: the level that picked the agent / the model (stage, task, run, project, global, auto, step-down, escalate).</p></div>
+<h2>Testers that missed</h2><div class="card">$missHtml</div>
+<h2>Day by day</h2><div class="card"><table><tr><th>Day</th><th>Stages</th><th>Tasks done</th><th>Approved first time</th><th>Stalls</th><th>Cost</th></tr>
+$dayHtml</table><p class="dim">Claude API-equivalent saved by using Sonnet and Haiku instead of Opus for every Claude stage: about `$$saved (your plan's quota, not money).</p></div>
+<h2>By task kind (what the tuner learns from)</h2><div class="card">$(if ($kindHtml) { "<table><tr><th>Kind</th><th>Role</th><th>Model</th><th>Stages</th><th>Approved</th><th>Stalls</th><th>Misses</th><th>Avg cost</th><th>Avg min</th></tr>$kindHtml</table>" } else { '<p class="dim">No labelled tasks yet: they start with the next planner run (D-035).</p>' })</div>
+<h2>Selection tuner</h2><div class="card">$tuneHtml</div>
 </main></body></html>
 "@
 [IO.File]::WriteAllText((Join-Path $usage 'model-report.html'), $html, $utf8)

@@ -23,7 +23,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-$KitVersion = '0.3.1'
+$KitVersion = '0.4.0'
 $Source = $PSScriptRoot
 
 $UserHome = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
@@ -34,9 +34,9 @@ $BinDir = Join-Path $ProtocolDir 'bin'
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 
 # The engine files copied to ~/.agents/protocol (relative paths).
-$PayloadFiles = @('ai-relay.ps1', 'setup.ps1', 'AI-PROTOCOL.md', 'RELAY-AGENT.md', 'relay-defaults.json',
+$PayloadFiles = @('ai-relay.ps1', 'relay-select.ps1', 'setup.ps1', 'AI-PROTOCOL.md', 'RELAY-AGENT.md', 'relay-defaults.json',
                   'bin\relay.cmd', 'bin\claude-statusline.ps1', 'tools\model-report.ps1', 'tools\usage-refresh.ps1',
-                  'tools\model-scout.mjs', 'tools\model-bench.ps1')
+                  'tools\model-scout.mjs', 'tools\model-bench.ps1', 'tools\selection-tuner.ps1', 'tests\relay-select.tests.ps1', 'docs\model-selection.md')
 # The Windows tasks the 'tasks' step sets up (tools/*.ps1 -Schedule) and Remove deletes.
 $TaskNames = @('AI relay usage refresh', 'AI relay model report')
 # Files the user is expected to edit: never overwritten once they exist.
@@ -373,7 +373,7 @@ function Do-Remove {
   if ($engine -and $engine.created -and (Test-Path -LiteralPath $usage)) { Remove-Item -LiteralPath $usage -Recurse -Force }
   Get-ChildItem -LiteralPath $ProtocolDir -Directory -Filter 'backup-ai-relay-kit-*' -ErrorAction SilentlyContinue |
     ForEach-Object { $notes += "kept backups: $($_.FullName)" }
-  foreach ($d in @($BinDir, (Join-Path $ProtocolDir 'tools'), $ProtocolDir, (Split-Path -Parent $ProtocolDir))) {
+  foreach ($d in @($BinDir, (Join-Path $ProtocolDir 'tools'), (Join-Path $ProtocolDir 'tests'), (Join-Path $ProtocolDir 'docs'), $ProtocolDir, (Split-Path -Parent $ProtocolDir))) {
     if ((Test-Path -LiteralPath $d) -and -not (Get-ChildItem -LiteralPath $d -Force)) { Remove-Item -LiteralPath $d -Force }
   }
   Out-Result ([ordered]@{ ok = $true; action = 'remove'; notes = $notes })
